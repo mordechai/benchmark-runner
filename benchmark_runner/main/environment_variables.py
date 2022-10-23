@@ -47,13 +47,13 @@ class EnvironmentVariables:
         self._environment_variables_dict['cluster'] = EnvironmentVariables.get_env('CLUSTER', 'openshift')
 
         # dynamic parameters - configure for local run
-        self._environment_variables_dict['workload'] = EnvironmentVariables.get_env('WORKLOAD', '')
+        self._environment_variables_dict['workload'] = EnvironmentVariables.get_env('WORKLOAD', 'oadp')
         self._environment_variables_dict['kubeadmin_password'] = EnvironmentVariables.get_env('KUBEADMIN_PASSWORD', '')
 
         # PIN=node selector
-        self._environment_variables_dict['pin_node_benchmark_operator'] = EnvironmentVariables.get_env('PIN_NODE_BENCHMARK_OPERATOR', '')
-        self._environment_variables_dict['pin_node1'] = EnvironmentVariables.get_env('PIN_NODE1', '')
-        self._environment_variables_dict['pin_node2'] = EnvironmentVariables.get_env('PIN_NODE2', '')
+        self._environment_variables_dict['pin_node_benchmark_operator'] = EnvironmentVariables.get_env('PIN_NODE_BENCHMARK_OPERATOR', 'worker000-r640')
+        self._environment_variables_dict['pin_node1'] = EnvironmentVariables.get_env('PIN_NODE1', 'worker001-r640')
+        self._environment_variables_dict['pin_node2'] = EnvironmentVariables.get_env('PIN_NODE2', 'worker002-r640')
 
         # ElasticSearch
         self._environment_variables_dict['elasticsearch'] = EnvironmentVariables.get_env('ELASTICSEARCH', '')
@@ -84,7 +84,7 @@ class EnvironmentVariables:
                                                          'hammerdb_pod_mssql', 'hammerdb_vm_mssql', 'hammerdb_kata_mssql',
                                                          'hammerdb_pod_mssql_lso', 'hammerdb_vm_mssql_lso', 'hammerdb_kata_mssql_lso',
                                                          'vdbench_pod', 'vdbench_kata', 'vdbench_vm',
-                                                         'clusterbuster']
+                                                         'clusterbuster', 'oadp']
         # Workloads namespaces
         self._environment_variables_dict['workload_namespaces'] = {
             'stressng': 'benchmark-operator',
@@ -92,6 +92,7 @@ class EnvironmentVariables:
             'uperf': 'benchmark-operator',
             'vdbench': 'benchmark-runner',
             'clusterbuster': 'clusterbuster',
+            'oadp': 'benchmark-runner',
         }
 
         # Update namespace
@@ -146,7 +147,7 @@ class EnvironmentVariables:
             self._environment_variables_dict['run_artifacts_path'] = os.path.join(self._environment_variables_dict['run_artifacts'], f"{self._environment_variables_dict['workload'].replace('_', '-')}-{self._environment_variables_dict['time_stamp_format']}")
 
         # True/False: default False
-        self._environment_variables_dict['save_artifacts_local'] = EnvironmentVariables.get_boolean_from_environment('SAVE_ARTIFACTS_LOCAL', False)
+        self._environment_variables_dict['save_artifacts_local'] = EnvironmentVariables.get_boolean_from_environment('SAVE_ARTIFACTS_LOCAL', True)
         # True/False: default False
         self._environment_variables_dict['enable_prometheus_snapshot'] = EnvironmentVariables.get_boolean_from_environment('ENABLE_PROMETHEUS_SNAPSHOT', False)
         # end dynamic parameters - configure for local run

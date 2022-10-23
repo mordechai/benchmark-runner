@@ -9,7 +9,7 @@ from benchmark_runner.main.environment_variables import environment_variables
 from benchmark_runner.common.clouds.Azure.azure_operations import AzureOperations
 from benchmark_runner.common.clouds.IBM.ibm_operations import IBMOperations
 from benchmark_runner.clusterbuster.clusterbuster_workloads import ClusterBusterWorkloads
-from benchmark_runner.common.oc.oc import OC
+from benchmark_runner.oadp.oadp_workloads import OadpWorkloads
 
 # logger
 log_level = os.environ.get('log_level', 'INFO').upper()
@@ -45,6 +45,7 @@ def main():
     is_benchmark_operator_workload = 'benchmark-operator' in (environment_variables.get_workload_namespace(workload), environment_variables_dict.get("runner_type"))
     is_benchmark_runner_workload = 'benchmark-runner' in (environment_variables.get_workload_namespace(workload), environment_variables_dict.get("runner_type"))
     is_clusterbuster_workload = 'clusterbuster' in (environment_variables.get_workload_namespace(workload), environment_variables_dict.get("runner_type"))
+    is_oadp_workload = 'oadp' in (environment_variables.get_workload_namespace(workload), environment_variables_dict.get("runner_type"))
     # workload name validation
     if workload and not ci_status:
         if workload not in environment_variables.workloads_list:
@@ -56,6 +57,8 @@ def main():
             raise Exception(f'Invalid run type: {run_type} \n, choose one from the list: {environment_variables.run_types_list}')
         if is_clusterbuster_workload:
             clusterbuster_workload = ClusterBusterWorkloads()
+        if is_oadp_workload:
+            oadp_workload = OadpWorkloads()
         elif is_benchmark_operator_workload:
             benchmark_operator_workload = BenchmarkOperatorWorkloads()
         elif is_benchmark_runner_workload:
@@ -160,6 +163,15 @@ def main():
         # benchmark-runner node selector
         return clusterbuster_workload.run()
 
+    @logger_time_stamp
+    def run_oadp_workload():
+        """
+        This method run oadp workload
+        :return:
+        """
+        # benchmark-runner node selector
+        return oadp_workload.run()
+
     success = True
     # azure_cluster_start_stop
     if azure_cluster_stop or azure_cluster_start:
@@ -186,6 +198,8 @@ def main():
         success = run_benchmark_runner_workload()
     elif is_clusterbuster_workload:
         success = run_clusterbuster_workload()
+    elif is_oadp_workload:
+        success = run_oadp_workload()
     else:
         logger.error(f"empty workload, choose one from the list: {environment_variables.workloads_list}")
         raise SystemExit(SYSTEM_EXIT_UNKNOWN_EXECUTION_TYPE)
