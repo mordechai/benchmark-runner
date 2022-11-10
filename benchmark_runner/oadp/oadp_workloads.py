@@ -1,4 +1,3 @@
-
 import os
 import json
 
@@ -15,7 +14,7 @@ class OadpWorkloads(WorkloadsOperations):
 
     def __init__(self):
         super().__init__()
-        self.__oadp_path = '/tmp/mpqe-scale-scripts/mtc-helpers/busybox/BusyBoxPodSingleNS.sh 1 32Mi'
+        self.__oadp_path = '/tmp/mpqe-scale-scripts/mtc-helpers/busybox'
         # environment variables
         self.__namespace = self._environment_variables_dict.get('namespace', '')
         self.__oadp_workload = self._environment_variables_dict.get('oadp', '')
@@ -48,9 +47,11 @@ class OadpWorkloads(WorkloadsOperations):
             # metadata
             elif workload == 'metadata':
                 # run artifacts data
-                result_report_json_data['metadata']['run_artifacts_url'] = os.path.join(self._run_artifacts_url, f'{self._get_run_artifacts_hierarchy(workload_name=self._workload, is_file=True)}-{self._time_stamp_format}.tar.gz')
+                result_report_json_data['metadata']['run_artifacts_url'] = os.path.join(self._run_artifacts_url,
+                                                                                        f'{self._get_run_artifacts_hierarchy(workload_name=self._workload, is_file=True)}-{self._time_stamp_format}.tar.gz')
                 self._es_operations.upload_to_elasticsearch(index=index, data=result_report_json_data['metadata'])
-                self._es_operations.verify_elasticsearch_data_uploaded(index=index, uuid=result_report_json_data['metadata']['uuid'])
+                self._es_operations.verify_elasticsearch_data_uploaded(index=index,
+                                                                       uuid=result_report_json_data['metadata']['uuid'])
 
     @logger_time_stamp
     def delete_all(self):
@@ -87,6 +88,39 @@ class OadpWorkloads(WorkloadsOperations):
             self.delete_local_artifacts()
         self.delete_all()
 
+    #  todo  Move to OC class and convert to use jq if possible
+    def verify_running_pods(self, num_of_pods_expected, target_namespace):
+        """
+        This method verifies number of pods in namespace are in running state
+        :return:
+        """
+        running_pods = self.__ssh.run(cmd=f'oc get pods -n {target_namespace} --field-selector status.phase=Running --no-headers -o custom-columns=":metadata.name"')
+        if running_pods != '':
+            list_of_running_pods = running_pods.split('\n')
+            print('running_pods detected in {namespace} are: {running_pods} expected {num_of_pods_expected}')
+            if len(list_of_running_pods) == num_of_pods_expected:
+                print ("expected dataset is present")
+                return True
+            else:
+                return False
+        else:
+            print('expected dataset NOT present returning false')
+            return False
+
+    def create_oadp_source_dataset(self,num_of_assets_desired, target_namespace, pv_size):
+        """
+        This method creates dataset for oadp to work against
+        :return:
+        """
+        is_already_dataset_present=self.verify_running_pods(num_of_pods_expected=num_of_assets_desired, target_namespace=target_namespace)
+        if not is_already_dataset_present:
+            print('Warning did not find expected number of running pods in this namespace will create it now')
+            self.__ssh.run(cmd=f'{self.__oadp_path}/BusyBoxPodSingleNS.sh {num_of_assets_desired} {pv_size}Mi')
+            for i in range(1, num_of_assets_desired + 1):
+                print('checking for f\'{namespace}-{i}\' in namespace= f\'{namespace}\'')
+                self._oc.wait_for_pod_ready(pod_name=f'{target_namespace}-{i}', namespace=target_namespace)
+
+    # todo wait_for_pod_create use this from OC class
     @logger_time_stamp
     def run_workload(self):
         """
@@ -94,14 +128,27 @@ class OadpWorkloads(WorkloadsOperations):
         :return:
         """
         # release pass uuid and workload
-        self.__ssh.run(cmd=f'{self.__oadp_path}')
+        # Check if names pace
+        # oc get pods -n busybox-perf-single-ns-3-pods -ojson | jq '.items[].status.containerStatuses | select(.[].ready == true) | .[].name '
+        num_of_assets_desired: int = 3
+        namespace = f'busybox-perf-single-ns-{num_of_assets_desired}-pods'
+        dataset_already_present = self.verify_running_pods(num_of_pods_expected=num_of_assets_desired, target_namespace=namespace)
+        if not dataset_already_present:
+            self.create_oadp_source_dataset(num_of_assets_desired, target_namespace=namespace, pv_size=32)
+    # todo need to queue workload
+    # todo ansible-playbook test-oadp.yaml -e "test=1 testcase=1.1.1 plugin=csi use_cli=true OADP_CR_TYPE=backup OADP_CR_NAME=backup-csi-busybox-perf-single-ns-3-pods backup_name=backup-csi-busybox-perf-single-ns-3-pods namespaces_to_backup=busybox-perf-single-ns-3-pods result_dir_base_path=/tmp/results/" -vv
+    # todo may need to verify before that CR is not present
+    # todo convert csv to json file
+    # todo test with prom on
+
         if os.path.exists(os.path.join(self.__result_report)) and not os.stat(self.__result_report).st_size == 0:
             self.__ssh.run(cmd=f'cp {self.__result_report} {self._run_artifacts_path}')
             return True
         else:
             result_report_json_data = {}
             result_report_json_data['result'] = 'Failed'
-            result_report_json_data['run_artifacts_url'] = os.path.join(self._run_artifacts_url, f'{self._get_run_artifacts_hierarchy(workload_name=self._workload, is_file=True)}-{self._time_stamp_format}.tar.gz')
+            result_report_json_data['run_artifacts_url'] = os.path.join(self._run_artifacts_url,
+                                                                        f'{self._get_run_artifacts_hierarchy(workload_name=self._workload, is_file=True)}-{self._time_stamp_format}.tar.gz')
             if self._run_type == 'test_ci':
                 index = f'oadp-metadata-test-ci-results'
             elif self._run_type == 'release':

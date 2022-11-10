@@ -92,7 +92,7 @@ class EnvironmentVariables:
             'uperf': 'benchmark-operator',
             'vdbench': 'benchmark-runner',
             'clusterbuster': 'clusterbuster',
-            'oadp': 'benchmark-runner',
+            'oadp': 'oadp-workload'
         }
 
         # Update namespace

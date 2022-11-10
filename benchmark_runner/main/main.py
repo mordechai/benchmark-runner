@@ -45,7 +45,7 @@ def main():
     is_benchmark_operator_workload = 'benchmark-operator' in (environment_variables.get_workload_namespace(workload), environment_variables_dict.get("runner_type"))
     is_benchmark_runner_workload = 'benchmark-runner' in (environment_variables.get_workload_namespace(workload), environment_variables_dict.get("runner_type"))
     is_clusterbuster_workload = 'clusterbuster' in (environment_variables.get_workload_namespace(workload), environment_variables_dict.get("runner_type"))
-    is_oadp_workload = 'oadp' in (environment_variables.get_workload_namespace(workload), environment_variables_dict.get("runner_type"))
+    is_oadp_workload = 'oadp-workload' in (environment_variables.get_workload_namespace(workload), environment_variables_dict.get("runner_type"))
     # workload name validation
     if workload and not ci_status:
         if workload not in environment_variables.workloads_list:
