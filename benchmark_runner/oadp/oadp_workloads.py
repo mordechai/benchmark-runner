@@ -23,14 +23,14 @@ class OadpWorkloads(WorkloadsOperations):
     def __init__(self):
         super().__init__()
         self.__oadp_path = '/tmp/mpqe-scale-scripts/mtc-helpers/busybox'
-        self.__oadp_base_dir = '/home/mlehrer/Projects/mpqe-scale-scripts/oadp-helpers'
-        self.__oadp_scenario_data = '/home/mlehrer/Projects/mpqe-scale-scripts/oadp-helpers/templates/internal_data/tests.yaml'
+        self.__oadp_base_dir = '/tmp/mpqe-scale-scripts/oadp-helpers'
+        self.__oadp_scenario_data = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/internal_data/single_ns.yaml'
         self.__oadp_promql_queries = '/home/mlehrer/Projects/mpqe-scale-scripts/oadp-helpers/templates/metrics/metrics-oadp.yaml'
         # environment variables
         self.__namespace = self._environment_variables_dict.get('namespace', '')
         self.__oadp_workload = self._environment_variables_dict.get('oadp', '')
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
-        self.__oadp_scenario_name = 'restic-backup-scale-50-pod'
+        self.__oadp_scenario_name = 'backup-restic-busybox-perf-single-100-pods-rbd'
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
@@ -227,6 +227,39 @@ class OadpWorkloads(WorkloadsOperations):
         self.__result_dicts.append(noobaa_details)
 
     @logger_time_stamp
+    def verify_pod_pv_size_and_sc(self, podName, expected_ns, expected_sc, expected_size ):
+        '''
+        method used to verify pod volume is the size, and sc intended is correct
+                "volumes": [
+            {
+                "name": "busybox-perf-single-ns-10-pods-1",
+                "persistentVolumeClaim": {
+                    "claimName": "pvc-busybox-perf-single-ns-10-pods-1"
+                }
+
+        '''
+        # get pod's
+        query = '"{.spec.volumes[0].persistentVolumeClaim.claimName}"'
+        pvc_name = self.__ssh.run(cmd=f'oc get pod {podName} -n {expected_ns} -o jsonpath={query}')
+        if (pvc_name.find('Error') > 0 and  pvc_name != ''):
+            return False
+        else:
+            # get pvc sc and size and compare to what was expected
+            query = "'{.spec.storageClassName} {.spec.resources.requests.storage}'"
+            cmd_get_pvc_sc_and_size = self.__ssh.run(cmd=f'oc get pvc {pvc_name} -n {expected_ns} -o jsonpath={query}')
+            current_sc = cmd_get_pvc_sc_and_size.split(' ')[0]
+            current_size = cmd_get_pvc_sc_and_size.split(' ')[1]
+            if current_sc != expected_sc:
+                logger.info(f"current pv storage class used: {current_sc} doesnt match expected storage class of: {expected_sc}")
+                return False
+            if current_size != expected_size:
+                logger.info(f"current pv size: {current_size} doesnt match expected pv size: {expected_size}")
+                return False
+            logger.info(f"pod: {podName} in ns: {expected_ns} matches desired storage and pv size")
+            return True
+
+
+    @logger_time_stamp
     def verify_running_pods(self, num_of_pods_expected, target_namespace):
         """
         This method verifies number of pods in namespace are in running state
@@ -259,20 +292,35 @@ class OadpWorkloads(WorkloadsOperations):
         self.oadp_timer(action="stop", transaction_name='delete_oadp_source_dataset')
 
     @logger_time_stamp
-    def create_oadp_source_dataset(self, num_of_assets_desired, target_namespace, pv_size):
+    def verify_pod_presence_and_storage(self, num_of_pods_expected, target_namespace, expected_sc, expected_size):
+        '''
+        checks pod presence via func verify_running_pods
+        checks pod's pv storage class used, and pv size via func verify_pod_pv_size_and_sc
+        '''
+        check_num_of_pods_and_state = self.verify_running_pods(num_of_pods_expected,target_namespace)
+        if check_num_of_pods_and_state == False:
+            logger.info(f"Dataset not as expected - did not find {num_of_pods_expected} of pods in namespace {target_namespace}")
+            return False
+        list_of_pods = self.get_list_of_pods(namespace=target_namespace)
+        for p in list_of_pods:
+            pod_storage_status = self.verify_pod_pv_size_and_sc(podName=p, expected_ns=target_namespace, expected_sc=expected_sc, expected_size=expected_size)
+            if pod_storage_status == False:
+                return False
+        return True
+
+
+    @logger_time_stamp
+    def create_oadp_source_dataset(self, num_of_assets_desired, target_namespace, pv_size, storage):
         """
         This method creates dataset for oadp to work against
         :return:
         """
         self.oadp_timer(action="start", transaction_name='dataset_creation')
-        is_already_dataset_present = self.verify_running_pods(num_of_pods_expected=num_of_assets_desired,
-                                                              target_namespace=target_namespace)
-        if not is_already_dataset_present:
-            print('Warning did not find expected number of running pods in this namespace will create it now')
-            self.__ssh.run(cmd=f'{self.__oadp_path}/BusyBoxPodSingleNS.sh {num_of_assets_desired} {pv_size}')
-            for i in range(1, num_of_assets_desired + 1):
-                print(f'checking for {target_namespace}-{i} in namespace= {target_namespace}')
-                self._oc.wait_for_pod_ready(pod_name=f'{target_namespace}-{i}', namespace=target_namespace)
+        print(f'BusyBoxPodSingleNS.sh {num_of_assets_desired} {pv_size} {storage}')
+        self.__ssh.run(cmd=f'{self.__oadp_path}/BusyBoxPodSingleNS.sh {num_of_assets_desired} {pv_size} {storage}')
+        for i in range(1, num_of_assets_desired + 1):
+            print(f'checking for {target_namespace}-{i} in namespace= {target_namespace}')
+            self._oc.wait_for_pod_ready(pod_name=f'{target_namespace}-{i}', namespace=target_namespace)
         self.oadp_timer(action="stop", transaction_name='dataset_creation')
 
     @logger_time_stamp
@@ -763,9 +811,10 @@ class OadpWorkloads(WorkloadsOperations):
         self.__result_dicts.append(test_scenario)
 
         num_of_assets_desired: int = test_scenario['dataset']['pods_per_ns']
-        # namespace = test_scenario['args']['namespaces_to_backup']
-        namespace = f'busybox-perf-single-ns-{num_of_assets_desired}-pods'
+        namespace = test_scenario['args']['namespaces_to_backup']
+        # namespace = f'busybox-perf-single-ns-{num_of_assets_desired}-pods'
         # Check if this is a single or multi name space scenario
+
         # if test_scenario['dataset']['total_namespaces'] == 1:
         #     num_of_assets_desired: int = test_scenario['dataset']['pods_per_ns']
         #     namespace = test_scenario['args']['namespaces_to_backup']
@@ -776,9 +825,14 @@ class OadpWorkloads(WorkloadsOperations):
 
         # Check if namespace containing dataset to be 'backed up' is present
         # if dataset is not present, create it as we intend to perform backup
-        dataset_already_present = self.verify_running_pods(num_of_pods_expected=num_of_assets_desired, target_namespace=namespace)
+        num_of_pods_expected = num_of_assets_desired
+        target_namespace = test_scenario['args']['namespaces_to_backup']
+        expected_sc = test_scenario['dataset']['sc']
+        expected_size = test_scenario['dataset']['pv_size']
+        dataset_already_present = self.verify_pod_presence_and_storage(num_of_pods_expected, target_namespace, expected_sc, expected_size)
+        # dataset_already_present = self.verify_running_pods(num_of_pods_expected=num_of_assets_desired, target_namespace=namespace)
         if not dataset_already_present and test_scenario['args']['OADP_CR_TYPE'] == 'backup':
-            self.create_oadp_source_dataset(num_of_assets_desired, target_namespace=namespace, pv_size=test_scenario['dataset']['pv_size'])
+            self.create_oadp_source_dataset(num_of_assets_desired, target_namespace=namespace, pv_size=test_scenario['dataset']['pv_size'], storage=test_scenario['dataset']['sc'] )
 
         # Check if dataset related to restore operation is already present
         # if it is then remove the relevant namespaces as we intend to perform restore
