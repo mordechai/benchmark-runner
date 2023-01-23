@@ -30,12 +30,14 @@ class OadpWorkloads(WorkloadsOperations):
         self.__namespace = self._environment_variables_dict.get('namespace', '')
         self.__oadp_workload = self._environment_variables_dict.get('oadp', '')
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
-        self.__oadp_scenario_name = 'backup-restic-busybox-perf-single-100-pods-rbd'
+        self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-25-pods-rbd'
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
         self.__oadp_log = os.path.join(self._run_artifacts_path, 'oadp.log')
         self.__ssh = SSH()
+        self.__oadp_resources = {}
+        self.__oadp_runtime_resource_mapping = {}
         self.__result_dicts = []
         self.__run_metadata = {
             "summary": {
@@ -47,7 +49,8 @@ class OadpWorkloads(WorkloadsOperations):
                 "results": {},
                 "resources": {
                     "nodes": [],
-                    "pods": []
+                    "run_time_pods": [],
+                    "pods": {}
                 },
                 "transactions": []
             }
@@ -164,7 +167,6 @@ class OadpWorkloads(WorkloadsOperations):
             cmd=f"oc -n openshift-storage get csv -o yaml | grep full_version | tail -n 1")
         openshift_storage_version = openshift_storage_version_cmd.split('full_version: ')[1]
         storage_details['openshift_storage_version'] = openshift_storage_version
-        print(f'storage_details: {storage_details}')
         self.__result_dicts.append(storage_details)
         self.__run_metadata['summary']['env']['storage'].update(storage_details)
         self.__result_dicts.append(self.__run_metadata['summary']['env']['storage'])
@@ -196,7 +198,6 @@ class OadpWorkloads(WorkloadsOperations):
                 velero_details['velero']['velero_version'] = velero_version
             self.__run_metadata['summary']['env'].update(velero_details)
             self.__result_dicts.append(self.__run_metadata['summary']['env'])
-            print('test')
 
     @logger_time_stamp
     def get_noobaa_version_details(self):
@@ -369,7 +370,7 @@ class OadpWorkloads(WorkloadsOperations):
         # todo handle OADP 1.2 logic with changed --default-volume flag
         if plugin == 'restic':
             backup_cmd = self.__ssh.run(
-                cmd=f'oc -n openshift-adp exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --default-volumes-to-restic --snapshot-volumes=false')
+                cmd=f'oc -n openshift-adp exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --default-volumes-to-fs-backup=true --snapshot-volumes=false')
         if plugin == 'csi':
             backup_cmd = self.__ssh.run(
                 cmd=f'oc -n openshift-adp exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup}')
@@ -536,6 +537,7 @@ class OadpWorkloads(WorkloadsOperations):
         else:
             print('Yaml for test scenarios is not found or empty!!')
             logger.error('Test Scenario index is not found')
+            logger.exception(f'Test Scenario {scenario_name} index is not found')
 
     @logger_time_stamp
     def parse_oadp_cr(self, ns, cr_type, cr_name):
@@ -549,6 +551,7 @@ class OadpWorkloads(WorkloadsOperations):
             # todo Throw exception and fail test
             print(f"Warning no matching cr {cr_name} of type: {cr_type} was found")
         else:
+            # todo Avoid Multi OC cmds use single call by working against json output directly
             cr_info = {}
             jsonpath_cr_status = "'{.status.phase}'"
             cr_status = self.__ssh.run(
@@ -632,7 +635,7 @@ class OadpWorkloads(WorkloadsOperations):
             pod_details = [
                 {'name': response[0], 'cores': response[1], 'mem': response[2],
                  'resources': pod_resources, 'label': label }]
-            self.__run_metadata['summary']['resources']['pods'].append(pod_details)
+            self.__run_metadata['summary']['resources']['run_time_pods'].append(pod_details)
 
     @logger_time_stamp
     def calc_resource_diff(self, old_value, new_value):
@@ -647,6 +650,31 @@ class OadpWorkloads(WorkloadsOperations):
         print(f'old: {old_value}  new: {new_value}')
         diff = (new_value - old_value) / old_value * 100
         return diff
+
+    @logger_time_stamp
+    def calc_pod_basename(self, pod_name):
+        """
+        method gets pod base name
+        """
+        base_names = {}
+        pod_parts = pod_name.split("-")
+        base_name = ""
+        for part in pod_parts:
+            if any(map(str.isdigit, part)):
+                fullname = base_name[:-1]
+                print (f'correct name is {fullname}')
+                return fullname
+            else:
+                # if len(pod_parts) == 2:
+                base_name += part + "-"
+                print (f"base_name patial is {base_name}")
+        # if no return has already happened then podname doesnt contain digit
+        # so we parse on - and assume last part of name is unique char string that we dont care about
+        # csi-cephfsplugin-provisioner-asdf ==> return csi-cephfsplugin-provisioner
+        fullname = base_name[:-2]
+        print(f'correct name is {fullname}')
+        return fullname
+
 
     @logger_time_stamp
     def get_resources_per_ns(self, namespace, label=''):
@@ -666,35 +694,43 @@ class OadpWorkloads(WorkloadsOperations):
                         if pod_index is not None:
                             # pod_details = [{'cores': adm_stdout_response[1], 'mem': adm_stdout_response[2],'label': label}]
                             # Diff of memory between pod samples
-                            original_sample = self.__run_metadata['summary']['resources']['pods'][pod_index][0]['mem']
+                            original_sample = self.__run_metadata['summary']['resources']['run_time_pods'][pod_index][0]['mem']
                             latest_sample =  adm_stdout_response[2]
                             diff_mem = self.calc_resource_diff(original_sample, latest_sample)
                             # Diff of milicores between samples
-                            original_sample = self.__run_metadata['summary']['resources']['pods'][pod_index][0]['cores']
+                            original_sample = self.__run_metadata['summary']['resources']['run_time_pods'][pod_index][0]['cores']
                             latest_sample = adm_stdout_response[1]
                             diff_core = self.calc_resource_diff(original_sample, latest_sample)
+                            # Get pod base name per pod run time name
+                            pod_name_by_role = self.__oadp_runtime_resource_mapping[f'{adm_stdout_response[0]}']
+                            # Persist latest changes to hash indexed per pod run time name
                             pod_details = {f'{label}_cores': adm_stdout_response[1], f'{label}_mem': adm_stdout_response[2], 'diff_core_percent': f'{diff_core:.1f}', 'diff_mem_percent': f'{diff_mem:.1f}', 'label': label}
-                            original_dict = self.__run_metadata['summary']['resources']['pods'][pod_index][0]
-                            self.__run_metadata['summary']['resources']['pods'][pod_index][0] = {**original_dict, **pod_details}
+                            original_dict = self.__run_metadata['summary']['resources']['run_time_pods'][pod_index][0]
+                            self.__run_metadata['summary']['resources']['run_time_pods'][pod_index][0] = {**original_dict, **pod_details}
+                            # Set run time data to dict indexed by pod_role_name to allow for easy querying post run
+                            self.__run_metadata['summary']['resources']['pods'][pod_name_by_role] = self.__run_metadata['summary']['resources']['run_time_pods'][pod_index][0]
+                            # Todo remove run time hash of pod resource info
+                            # self.__run_metadata['summary']['resources']['run_time_pods'][pod_index].remove([0])
                     else:
+                        # Initalize key:value runtime pod name to base pod name for updating upon result collection
+                        self.initialize_pod_resources_by_base_name(pod_name=adm_stdout_response[0])
                         get_pod_json_output = self.__ssh.run(cmd=f"oc get pod {adm_stdout_response[0]} -n {namespace} -o json")
                         # Parse the JSON string into a Python object
                         data = json.loads(get_pod_json_output)
                         # Get resources req & limits of specific pod
                         pod_resources = data['spec']['containers'][0]['resources']
                         pod_details = [{'name': adm_stdout_response[0], 'cores': adm_stdout_response[1], 'mem': adm_stdout_response[2], 'resources': pod_resources, 'label': label}]
-                        self.__run_metadata['summary']['resources']['pods'].append(pod_details)
-                    # self.__result_dicts.append(pod_details)
+                        self.__run_metadata['summary']['resources']['run_time_pods'].append(pod_details)
 
     @logger_time_stamp
     def find_metadata_index_for_pods(self, target):
         """
         searches through list of dictionaries to return the right index
-        self.__run_metadata['summary']['resources']['pods']
+        self.__run_metadata['summary']['resources']['run_time_pods']
         """
-        for index in range(len(self.__run_metadata['summary']['resources']['pods'])):
-            print (f"{self.__run_metadata['summary']['resources']['pods'][index][0]['name']}  == {target}")
-            if self.__run_metadata['summary']['resources']['pods'][index][0]['name'] == target:
+        for index in range(len(self.__run_metadata['summary']['resources']['run_time_pods'])):
+            print (f"{self.__run_metadata['summary']['resources']['run_time_pods'][index][0]['name']}  == {target}")
+            if self.__run_metadata['summary']['resources']['run_time_pods'][index][0]['name'] == target:
                 return index
 
     @logger_time_stamp
@@ -790,6 +826,28 @@ class OadpWorkloads(WorkloadsOperations):
         # Load data from oadp-helpers/templates/internal_data/tests.yaml
         test_data = yaml.safe_load(Path(self.__oadp_scenario_data).read_text())
         return (test_data['scenarios'][index])
+
+    @logger_time_stamp
+    def initialize_pod_resources_by_base_name(self, pod_name):
+        """
+        method takes pod name and updates dict
+        """
+        base_pod_name = self.calc_pod_basename(pod_name)
+        if base_pod_name not in self.__oadp_resources.keys():
+            self.__oadp_resources[base_pod_name] = {}
+            self.__oadp_runtime_resource_mapping[pod_name] = f"{base_pod_name}_0"
+            # self.__oadp_resources[base_name] =  {"base_name": base_pod_name}
+            print(f'key {base_pod_name} not in {self.__oadp_resources.keys} ')
+        else:
+            if base_pod_name in self.__oadp_resources.keys():
+                count = 1
+                for key, value in self.__oadp_resources.items():
+                    if base_pod_name.lower() in key.lower():
+                        count += 1
+                        print (f" base_pod_name: {base_pod_name} key: {key} value: {value}  and count value is : {count}" )
+                        print ("here")
+                self.__oadp_resources[f"{base_pod_name}_{count - 1}"] = {}
+                self.__oadp_runtime_resource_mapping[pod_name] = f"{base_pod_name}_{count - 1}"
 
     @logger_time_stamp
     @prometheus_metrics(yaml_full_path='/home/mlehrer/Projects/mpqe-scale-scripts/oadp-helpers/templates/metrics/metrics-oadp.yaml')
