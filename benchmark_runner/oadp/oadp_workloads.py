@@ -30,7 +30,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__namespace = self._environment_variables_dict.get('namespace', '')
         self.__oadp_workload = self._environment_variables_dict.get('oadp', '')
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
-        self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-25-pods-rbd'
+        self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-100-pods-rbd'
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
@@ -710,7 +710,7 @@ class OadpWorkloads(WorkloadsOperations):
                             # Set run time data to dict indexed by pod_role_name to allow for easy querying post run
                             self.__run_metadata['summary']['resources']['pods'][pod_name_by_role] = self.__run_metadata['summary']['resources']['run_time_pods'][pod_index][0]
                             # Todo remove run time hash of pod resource info
-                            # self.__run_metadata['summary']['resources']['run_time_pods'][pod_index].remove([0])
+                            self.__run_metadata['summary']['resources']['run_time_pods'][pod_index][0]
                     else:
                         # Initalize key:value runtime pod name to base pod name for updating upon result collection
                         self.initialize_pod_resources_by_base_name(pod_name=adm_stdout_response[0])
@@ -771,6 +771,7 @@ class OadpWorkloads(WorkloadsOperations):
         if len(get_node_names.splitlines()) > 0 and 'error' not in get_node_names:
             for bm in get_node_names.splitlines():
                 self.get_node_resource_avail_adm(ocp_node=bm)
+    # todo node resource pre and post run comparison with label=end not complete
 
     @logger_time_stamp
     def get_oadp_velero_and_cr_log(self, cr_name, cr_type):

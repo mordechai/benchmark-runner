@@ -46,10 +46,14 @@ class S3Operations:
         :return:
         """
         try:
+            # self.__s3_client.upload_file(Filename=file_name_path,
+            #                              Bucket=bucket,
+            #                              Key=f'{key}/{upload_file}',
+            #                              ExtraArgs={'ServerSideEncryption': 'AES256'})
             self.__s3_client.upload_file(Filename=file_name_path,
                                          Bucket=bucket,
                                          Key=f'{key}/{upload_file}',
-                                         ExtraArgs={'ServerSideEncryption': 'AES256'})
+                                         ExtraArgs={})
 
         except ClientError:
             raise

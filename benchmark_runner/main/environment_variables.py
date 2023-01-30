@@ -56,8 +56,8 @@ class EnvironmentVariables:
         self._environment_variables_dict['pin_node2'] = EnvironmentVariables.get_env('PIN_NODE2', 'worker002-r640')
 
         # ElasticSearch
-        self._environment_variables_dict['elasticsearch'] = EnvironmentVariables.get_env('ELASTICSEARCH', '')
-        self._environment_variables_dict['elasticsearch_port'] = EnvironmentVariables.get_env('ELASTICSEARCH_PORT', '')
+        self._environment_variables_dict['elasticsearch'] = EnvironmentVariables.get_env('ELASTICSEARCH', 'f01-h08-000-1029u.rdu2.scalelab.redhat.com')
+        self._environment_variables_dict['elasticsearch_port'] = EnvironmentVariables.get_env('ELASTICSEARCH_PORT', '9200')
         self._environment_variables_dict['elasticsearch_user'] = EnvironmentVariables.get_env('ELASTICSEARCH_USER', '')
         self._environment_variables_dict['elasticsearch_password'] = EnvironmentVariables.get_env('ELASTICSEARCH_PASSWORD', '')
         # 'http'(Default) / 'https' to use SSL to connect ElasticSearch
@@ -174,11 +174,11 @@ class EnvironmentVariables:
         # IBM data
         self._environment_variables_dict['region_name'] = EnvironmentVariables.get_env('IBM_REGION_NAME', '')
         # None(default) - must for unittest
-        self._environment_variables_dict['endpoint_url'] = EnvironmentVariables.get_env('IBM_ENDPOINT_URL', None)
-        self._environment_variables_dict['access_key_id'] = EnvironmentVariables.get_env('IBM_ACCESS_KEY_ID', '')
-        self._environment_variables_dict['secret_access_key'] = EnvironmentVariables.get_env('IBM_SECRET_ACCESS_KEY', '')
-        self._environment_variables_dict['bucket'] = EnvironmentVariables.get_env('IBM_BUCKET', '')
-        self._environment_variables_dict['key'] = EnvironmentVariables.get_env('IBM_KEY', '')
+        self._environment_variables_dict['endpoint_url'] = EnvironmentVariables.get_env('IBM_ENDPOINT_URL', 'http://f01-h08-000-1029u.rdu2.scalelab.redhat.com:9000')
+        self._environment_variables_dict['access_key_id'] = EnvironmentVariables.get_env('IBM_ACCESS_KEY_ID', 'H6N29y9YA2Y74Oi0')
+        self._environment_variables_dict['secret_access_key'] = EnvironmentVariables.get_env('IBM_SECRET_ACCESS_KEY', 'kibv5Hrm4HK0IbtHNgNlKDIRytwKyIrg')
+        self._environment_variables_dict['bucket'] = EnvironmentVariables.get_env('IBM_BUCKET', 'oadp-result-bucket')
+        self._environment_variables_dict['key'] = EnvironmentVariables.get_env('IBM_KEY', 'run-artifacts')
 
         # Parameters below related to 'install_ocp()'
         # MANDATORY for OCP install: install ocp version - insert version to install i.e. 'latest-4.8' : https://mirror.openshift.com/pub/openshift-v4/clients/ocp
