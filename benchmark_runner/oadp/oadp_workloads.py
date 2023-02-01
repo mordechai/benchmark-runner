@@ -25,7 +25,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_path = '/tmp/mpqe-scale-scripts/mtc-helpers/busybox'
         self.__oadp_base_dir = '/tmp/mpqe-scale-scripts/oadp-helpers'
         self.__oadp_scenario_data = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/internal_data/single_ns.yaml'
-        self.__oadp_promql_queries = '/home/mlehrer/Projects/mpqe-scale-scripts/oadp-helpers/templates/metrics/metrics-oadp.yaml'
+        self.__oadp_promql_queries = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/metrics/metrics-oadp.yaml'
         # environment variables
         self.__namespace = self._environment_variables_dict.get('namespace', '')
         self.__oadp_workload = self._environment_variables_dict.get('oadp', '')
@@ -851,7 +851,7 @@ class OadpWorkloads(WorkloadsOperations):
                 self.__oadp_runtime_resource_mapping[pod_name] = f"{base_pod_name}_{count - 1}"
 
     @logger_time_stamp
-    @prometheus_metrics(yaml_full_path='/home/mlehrer/Projects/mpqe-scale-scripts/oadp-helpers/templates/metrics/metrics-oadp.yaml')
+    @prometheus_metrics(yaml_full_path='/tmp/mpqe-scale-scripts/oadp-helpers/templates/metrics/metrics-oadp.yaml')
     def run_workload(self):
         """
         This method run oadp workload
