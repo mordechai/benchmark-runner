@@ -316,9 +316,17 @@ class OadpWorkloads(WorkloadsOperations):
         This method creates dataset for oadp to work against
         :return:
         """
+        # check whether current NS already exists
+        check_ns_presence = self.__ssh.run(cmd=f'oc get ns {target_namespace}')
+        if check_ns_presence.find('not found') < 0:
+            # delete ns with same name
+            logger.warn(f"NS {target_namespace} with same name already exists and will be remoed")
+            check_ns_presence = self.__ssh.run(cmd=f'oc delete ns {target_namespace}')
+            if check_ns_presence.find('deleted') < 0:
+                logger.exception("Unable to remove NS {ns} when attempting to clean up before populating NS likely same ns exists on different storage")
         self.oadp_timer(action="start", transaction_name='dataset_creation')
         print(f'BusyBoxPodSingleNS.sh {num_of_assets_desired} {pv_size} {storage}')
-        self.__ssh.run(cmd=f'{self.__oadp_path}/BusyBoxPodSingleNS.sh {num_of_assets_desired} {pv_size} {storage}')
+        self.__ssh.run(cmd=f'{self.__oadp_path}/BusyBoxPodSingleNS.sh {num_of_assets_desired} {pv_size} {storage} > /tmp/dataset-creation.log')
         for i in range(1, num_of_assets_desired + 1):
             print(f'checking for {target_namespace}-{i} in namespace= {target_namespace}')
             self._oc.wait_for_pod_ready(pod_name=f'{target_namespace}-{i}', namespace=target_namespace)
@@ -413,6 +421,30 @@ class OadpWorkloads(WorkloadsOperations):
             return True
         else:
             return False
+
+    @logger_time_stamp
+    def set_default_storage_class(self,sc):
+        """
+        method returns default sc if not set then empy string returned
+        """
+        current_sc = self.get_default_storage_class()
+        if current_sc != sc:
+            #set desired sc as default
+            json_sc = '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+            set_def_sc_cmd = self.__ssh.run(cmd=f"oc patch storageclass {sc} -p '{json_sc}'")
+            if set_def_sc_cmd.find('patched') < 0:
+                print(f"Unable to set {sc} as default storage class")
+                logger.exception(f"Unable to set {sc} as default storage class")
+        # Verify other storage classes present are not set as default storage
+        cmd_output = self.__ssh.run(cmd=f'oc get sc -o jsonpath="{{.items[*].metadata.name}}"')
+        list_of_storage_class_present = list(filter(None, cmd_output.split(' ')))
+        for storage in list_of_storage_class_present:
+            if storage != sc:
+                # set default storage class to false
+                json_sc = '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}'
+                set_sc_as_non_default_cmd = self.__ssh.run(cmd=f"oc patch storageclass {storage} -p '{json_sc}'")
+                if set_sc_as_non_default_cmd.find('patched') < 0:
+                    logger.warn(f"Note that storage {storage} was set  is-default-class:false as its not desired sc of {sc} ")
 
     @logger_time_stamp
     def get_default_storage_class(self):
@@ -888,6 +920,10 @@ class OadpWorkloads(WorkloadsOperations):
         target_namespace = test_scenario['args']['namespaces_to_backup']
         expected_sc = test_scenario['dataset']['sc']
         expected_size = test_scenario['dataset']['pv_size']
+
+        # Verify desired storage is default storage class and others are non default
+        self.set_default_storage_class(expected_sc)
+
         dataset_already_present = self.verify_pod_presence_and_storage(num_of_pods_expected, target_namespace, expected_sc, expected_size)
         # dataset_already_present = self.verify_running_pods(num_of_pods_expected=num_of_assets_desired, target_namespace=namespace)
         if not dataset_already_present and test_scenario['args']['OADP_CR_TYPE'] == 'backup':
