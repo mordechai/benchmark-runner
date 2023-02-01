@@ -742,7 +742,7 @@ class OadpWorkloads(WorkloadsOperations):
                             # Set run time data to dict indexed by pod_role_name to allow for easy querying post run
                             self.__run_metadata['summary']['resources']['pods'][pod_name_by_role] = self.__run_metadata['summary']['resources']['run_time_pods'][pod_index][0]
                             # Todo remove run time hash of pod resource info
-                            self.__run_metadata['summary']['resources']['run_time_pods'][pod_index][0]
+                            del self.__run_metadata['summary']['resources']['run_time_pods'][pod_index]
                     else:
                         # Initalize key:value runtime pod name to base pod name for updating upon result collection
                         self.initialize_pod_resources_by_base_name(pod_name=adm_stdout_response[0])
