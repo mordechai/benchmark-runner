@@ -30,7 +30,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__namespace = self._environment_variables_dict.get('namespace', '')
         self.__oadp_workload = self._environment_variables_dict.get('oadp', '')
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
-        self.__oadp_scenario_name = 'restore-csi-busybox-perf-single-100-pods-rbd'
+        self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-100-pods-rbd'
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
@@ -293,11 +293,14 @@ class OadpWorkloads(WorkloadsOperations):
         self.oadp_timer(action="stop", transaction_name='delete_oadp_source_dataset')
 
     @logger_time_stamp
-    def verify_pod_presence_and_storage(self, num_of_pods_expected, target_namespace, expected_sc, expected_size):
+    def verify_pod_presence_and_storage(self, num_of_pods_expected, target_namespace, expected_sc, expected_size, skip_dataset_validation):
         '''
         checks pod presence via func verify_running_pods
         checks pod's pv storage class used, and pv size via func verify_pod_pv_size_and_sc
         '''
+        if skip_dataset_validation == True:
+            logger.warn('You are skipping dataset validations - verify_pod_presence_and_storage will return True with out checks')
+            return True
         check_num_of_pods_and_state = self.verify_running_pods(num_of_pods_expected,target_namespace)
         if check_num_of_pods_and_state == False:
             logger.info(f"Dataset not as expected - did not find {num_of_pods_expected} of pods in namespace {target_namespace}")
@@ -927,8 +930,9 @@ class OadpWorkloads(WorkloadsOperations):
         # when performing backup
         # Check if source namespace aka our dataset is preseent, if dataset not prsent then create it
         if test_scenario['args']['OADP_CR_TYPE'] == 'backup':
+            skip_dataset_validation = test_scenario['args'].get('skip_source_dataset_check', False)
             dataset_already_present = self.verify_pod_presence_and_storage(num_of_pods_expected, target_namespace,
-                                                                           expected_sc, expected_size)
+                                                                           expected_sc, expected_size, skip_dataset_validation)
             if not dataset_already_present:
                 self.create_oadp_source_dataset(num_of_assets_desired, target_namespace=namespace, pv_size=test_scenario['dataset']['pv_size'], storage=test_scenario['dataset']['sc'] )
 
