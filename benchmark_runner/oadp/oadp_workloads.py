@@ -30,7 +30,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__namespace = self._environment_variables_dict.get('namespace', '')
         self.__oadp_workload = self._environment_variables_dict.get('oadp', '')
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
-        self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-100-pods-rbd'
+        self.__oadp_scenario_name = 'restore-csi-busybox-perf-single-100-pods-rbd'
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
@@ -924,21 +924,30 @@ class OadpWorkloads(WorkloadsOperations):
         # Verify desired storage is default storage class and others are non default
         self.set_default_storage_class(expected_sc)
 
-        dataset_already_present = self.verify_pod_presence_and_storage(num_of_pods_expected, target_namespace, expected_sc, expected_size)
-        # dataset_already_present = self.verify_running_pods(num_of_pods_expected=num_of_assets_desired, target_namespace=namespace)
-        if not dataset_already_present and test_scenario['args']['OADP_CR_TYPE'] == 'backup':
-            self.create_oadp_source_dataset(num_of_assets_desired, target_namespace=namespace, pv_size=test_scenario['dataset']['pv_size'], storage=test_scenario['dataset']['sc'] )
+        # when performing backup
+        # Check if source namespace aka our dataset is preseent, if dataset not prsent then create it
+        if test_scenario['args']['OADP_CR_TYPE'] == 'backup':
+            dataset_already_present = self.verify_pod_presence_and_storage(num_of_pods_expected, target_namespace,
+                                                                           expected_sc, expected_size)
+            if not dataset_already_present:
+                self.create_oadp_source_dataset(num_of_assets_desired, target_namespace=namespace, pv_size=test_scenario['dataset']['pv_size'], storage=test_scenario['dataset']['sc'] )
 
-        # Check if dataset related to restore operation is already present
-        # if it is then remove the relevant namespaces as we intend to perform restore
-        if dataset_already_present and test_scenario['args']['OADP_CR_TYPE'] == 'restore':
-            self.delete_oadp_source_dataset(target_namespace=test_scenario['args']['namespaces_to_backup'])
+        # when performing restore
+        # source dataset will be removed before restore attempt unless dataset yaml contains ['args']['existingResourcePolicy'] set to 'Update'
+        if test_scenario['args']['OADP_CR_TYPE'] == 'restore':
+            remove_source_dataset = test_scenario['args'].get('existingResourcePolicy', False)
+            if remove_source_dataset != 'Update':
+                self.delete_oadp_source_dataset(target_namespace=test_scenario['args']['namespaces_to_backup'])
+            elif remove_source_dataset == 'Update':
+                print ('WIP: logic for existingResourcePolicy OADP-1184 wil go here')
+                # todo Add logic for existingResourcePolicy OADP-1184 which requires existingResourcePolicy: Update to be set in Restore CR
 
         # Check if OADP CR name is present if so remove it
         oadp_cr_already_present = self.is_oadp_cr_present(ns='openshift-adp',
                                                           cr_type=test_scenario['args']['OADP_CR_TYPE'],
                                                           cr_name=test_scenario['args']['OADP_CR_NAME'])
         if oadp_cr_already_present:
+            logger.warn(f"You are attempting to use CR name: {test_scenario['args']['OADP_CR_NAME']} which is already present so it will be deleted")
             self.delete_oadp_custom_resources(cr_type=test_scenario['args']['OADP_CR_TYPE'], ns='openshift-adp',
                                               cr_name=test_scenario['args']['OADP_CR_NAME'])
 
