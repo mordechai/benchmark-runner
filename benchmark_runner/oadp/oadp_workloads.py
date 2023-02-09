@@ -30,7 +30,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__namespace = self._environment_variables_dict.get('namespace', '')
         self.__oadp_workload = self._environment_variables_dict.get('oadp', '')
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
-        self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-100-pods-rbd'
+        self.__oadp_scenario_name = 'restore-csi-busybox-perf-single-100-pods-rbd'
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
@@ -40,6 +40,8 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_runtime_resource_mapping = {}
         self.__result_dicts = []
         self.__run_metadata = {
+            "index": '',
+            "metadata": {},
             "summary": {
                 "env": {
                     "ocp": {},
@@ -73,28 +75,45 @@ class OadpWorkloads(WorkloadsOperations):
         result_report_json_file = open(self.__result_report)
         result_report_json_str = result_report_json_file.read()
         result_report_json_data = json.loads(result_report_json_str)
-        for workload, oadp_tests in result_report_json_data.items():
-            if self._run_type == 'test_ci':
-                index = f'oadp-{workload}-test-ci-results'
-            elif self._run_type == 'release':
-                index = f'oadp-{workload}-release-results'
-            else:
-                index = f'oadp-{workload}-results'
-            logger.info(f'upload index: {index}')
-            if workload != 'metadata':
-                self._es_operations.upload_to_elasticsearch(index=index, data=oadp_tests)
-                # for oadp_test in oadp_tests:
-                #     self._es_operations.upload_to_elasticsearch(index=index, data=oadp_test)
-            # metadata
-            elif workload == 'metadata':
-                # run artifacts data
-                result_report_json_data['metadata']['run_artifacts_url'] = os.path.join(self._run_artifacts_url,
-                                                                                        f'{self._get_run_artifacts_hierarchy(workload_name=self._workload, is_file=True)}-{self._time_stamp_format}.tar.gz')
-                self._es_operations.upload_to_elasticsearch(index=index, data=result_report_json_data['metadata'])
-                self._es_operations.verify_elasticsearch_data_uploaded(index=index,
-                                                                       uuid=result_report_json_data['metadata']['uuid'])
+        # for workload, oadp_tests in result_report_json_data.items():
+        #     if self._run_type == 'test_ci':
+        #         index = f'oadp-{workload}-test-ci-results'
+        #     elif self._run_type == 'release':
+        #         index = f'oadp-{workload}-release-results'
+        #     else:
+        #         index = f'oadp-{workload}-results'
+        index = self.__run_metadata['index']
+        logger.info(f'upload index: {index}')
+        metadata_details = {'uuid': self._environment_variables_dict['uuid'], 'run_artifacts_url': os.path.join(self._run_artifacts_url,f'{self._get_run_artifacts_hierarchy(workload_name=self._workload, is_file=True)}-{self._time_stamp_format}.tar.gz')}
+        # run artifacts data
+        result_report_json_data['metadata'] = {}
+        result_report_json_data['metadata'].update(metadata_details)
 
-    # todo need func for writing cr to json
+        # run artifacts data
+        # result_report_json_data['metadata']['run_artifacts_url'] = os.path.join(self._run_artifacts_url,f'{self._get_run_artifacts_hierarchy(workload_name=self._workload, is_file=True)}-{self._time_stamp_format}.tar.gz')
+        self._es_operations.upload_to_elasticsearch(index=index, data=result_report_json_data)
+        self._es_operations.verify_elasticsearch_data_uploaded(index=index, uuid=result_report_json_data['metadata']['uuid'])
+        # for workload, oadp_tests in result_report_json_data.items():
+        #     if workload != 'metadata':
+        #         logger.info(f'workload: {workload} oadp_tests {oadp_tests} and bool(oadp_tests): {bool(oadp_tests)}')
+                # if bool(result_report_json_data[workload]):
+                    # self._es_operations.upload_to_elasticsearch(index=index, data=result_report_json_data[workload])
+                # breaking result to partial
+                # for oadp_test in oadp_tests:
+                #     mykeys = oadp_tests.keys()
+                #     if (oadp_test != 'resources') and (oadp_test != 'transactions'):
+                #         print(f'oadp_test: {oadp_test}')
+                #         print(f'oadp_tests[oadp_test]: {oadp_tests[oadp_test]}')
+                #         self._es_operations.upload_to_elasticsearch(index=index, data=oadp_tests[oadp_test])
+                # metadata
+            # elif workload == 'metadata':
+            #     # run artifacts data
+            #     result_report_json_data['metadata']['run_artifacts_url'] = os.path.join(self._run_artifacts_url,
+            #                                                                             f'{self._get_run_artifacts_hierarchy(workload_name=self._workload, is_file=True)}-{self._time_stamp_format}.tar.gz')
+            #     self._es_operations.upload_to_elasticsearch(index=index, data=result_report_json_data['metadata'])
+            #     self._es_operations.verify_elasticsearch_data_uploaded(index=index,
+            #                                                            uuid=result_report_json_data['metadata']['uuid'])
+
     @logger_time_stamp
     def get_logs_by_pod_ns(self, namespace):
         """
@@ -378,7 +397,6 @@ class OadpWorkloads(WorkloadsOperations):
         """
         this method is for testing oadp backup
         """
-        # todo handle OADP 1.2 logic with changed --default-volume flag
         if plugin == 'restic':
             backup_cmd = self.__ssh.run(
                 cmd=f'oc -n openshift-adp exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --default-volumes-to-fs-backup=true --snapshot-volumes=false')
@@ -490,7 +508,7 @@ class OadpWorkloads(WorkloadsOperations):
         oadp_csv_creation_time = self.__ssh.run(
             cmd=f"oc get -n openshift-adp csv  -o jsonpath={jsonpath_oadp_csv_creation_time}")
         if oadp_csv_creation_time != '':
-            oadp_details['oadp']['oadp_csv_creation_time'] = oadp_csv_creation_time
+            oadp_details['oadp']['oadp_csv_creation_time'] = oadp_csv_creation_time.split('.')[0]
 
         jsonpath_oadp_subscription_used = "{.items[?(@.status.installedCSV == " + f'"{oadp_csv}"' + ")].metadata.name}"
         oadp_subscription_used = self.__ssh.run(
@@ -503,6 +521,14 @@ class OadpWorkloads(WorkloadsOperations):
             cmd=f"oc get subscription.operators.coreos.com {oadp_subscription_used} --namespace='openshift-adp' -o jsonpath={jsonpath_oadp_catalog_source}")
         if oadp_catalog_source != '':
             oadp_details['oadp']['catalog_source'] = oadp_catalog_source
+            #get iib here
+            jsonpath_oadp_iib = "'{.spec.image}'"
+            oadp_iib_cmd =  self.__ssh.run(cmd=f"oc get catsrc {oadp_catalog_source} -n openshift-marketplace -o jsonpath={jsonpath_oadp_iib} --ignore-not-found | grep -Eo 'iib:[0-9]+'")
+            if oadp_iib_cmd != '':
+                oadp_internal_build = self.__ssh.run(cmd=f"curl -s -k https://datagrepper.engineering.redhat.com/raw\?topic\=/topic/VirtualTopic.eng.ci.redhat-container-image.index.built\&contains\={oadp_iib_cmd}\&rows_per_page\=1\&delta\=15552000 | jq -r '.raw_messages[0].msg.artifact.nvr'")
+                if oadp_internal_build != '':
+                    oadp_details['oadp']['internal_build'] = oadp_internal_build.split('oadp-operator-bundle-container-')[1]
+                    oadp_details['oadp']['iib'] = oadp_iib_cmd.split('iib:')[1]
 
         jsonpath_cluster_name = "'{print $2}'"
         cluster_name = self.__ssh.run(
@@ -903,13 +929,13 @@ class OadpWorkloads(WorkloadsOperations):
         # Save test scenario run time settings run_metadata dict
         self.__run_metadata['summary']['runtime'].update(test_scenario)
         self.__result_dicts.append(test_scenario)
+        self.generate_elastic_index(test_scenario)
 
         num_of_assets_desired: int = test_scenario['dataset']['pods_per_ns']
         namespace = test_scenario['args']['namespaces_to_backup']
         # namespace = f'busybox-perf-single-ns-{num_of_assets_desired}-pods'
         # Check if this is a single or multi name space scenario
-
-        # if test_scenario['dataset']['total_namespaces'] == 1:
+         # if test_scenario['dataset']['total_namespaces'] == 1:
         #     num_of_assets_desired: int = test_scenario['dataset']['pods_per_ns']
         #     namespace = test_scenario['args']['namespaces_to_backup']
         #     # namespace = f'busybox-perf-single-ns-{num_of_assets_desired}-pods'
@@ -984,15 +1010,34 @@ class OadpWorkloads(WorkloadsOperations):
             result_report_json_data['result'] = 'Failed'
             result_report_json_data['run_artifacts_url'] = os.path.join(self._run_artifacts_url,
                                                                         f'{self._get_run_artifacts_hierarchy(workload_name=self._workload, is_file=True)}-{self._time_stamp_format}.tar.gz')
-            if self._run_type == 'test_ci':
-                index = f'oadp-metadata-test-ci-results'
-            elif self._run_type == 'release':
-                index = f'oadp-metadata-release-results'
-            else:
-                index = f'oadp-metadata-results'
+            # if self._run_type == 'test_ci':
+            #     index = f'oadp-metadata-test-ci-results'
+            # elif self._run_type == 'release':
+            #     index = f'oadp-metadata-release-results'
+            # else:
+            #     index = f'oadp-metadata-results'
+            index = self.generate_elastic_index(test_scenario)
             logger.info(f'upload index: {index}')
             self._es_operations.upload_to_elasticsearch(index=index, data=result_report_json_data)
             raise MissingResultReport()
+
+    @logger_time_stamp
+    def generate_elastic_index(self, scenario):
+        '''
+        method creates elastic index name based on test_scenario data
+        '''
+        if scenario['testcase'] < 2.0:
+            if scenario['dataset']['total_namespaces'] == 1:
+                index_name = 'oadp-' + scenario['testtype'] + '-' + 'single-namespace'
+            elif scenario['dataset']['total_namespaces'] > 1:
+                index_name = 'oadp-' + scenario['testtype'] + '-' + 'multi-namespace'
+        if (scenario['testcase'] >= 2.0 and scenario['testcase'] < 3.0):
+            if scenario['dataset']['pods_per_ns'] == 1:
+                index_name = 'oadp-' + scenario['testtype'] + '-' + 'single-pv-util'
+        print(f'index_name {index_name}')
+        self.__run_metadata['index'] = index_name
+        return index_name
+
 
     @logger_time_stamp
     def run(self):
