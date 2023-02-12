@@ -24,13 +24,13 @@ class OadpWorkloads(WorkloadsOperations):
         super().__init__()
         self.__oadp_path = '/tmp/mpqe-scale-scripts/mtc-helpers/busybox'
         self.__oadp_base_dir = '/tmp/mpqe-scale-scripts/oadp-helpers'
-        self.__oadp_scenario_data = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/internal_data/single_ns.yaml'
+        self.__oadp_scenario_data = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/internal_data/pvc_utlization.yaml'
         self.__oadp_promql_queries = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/metrics/metrics-oadp.yaml'
         # environment variables
         self.__namespace = self._environment_variables_dict.get('namespace', '')
         self.__oadp_workload = self._environment_variables_dict.get('oadp', '')
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
-        self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-10-pods-rbd'
+        self.__oadp_scenario_name = 'backup-restic-pvc_utlization-2-1-0-rbd'
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
@@ -328,6 +328,27 @@ class OadpWorkloads(WorkloadsOperations):
         self.oadp_timer(action="stop", transaction_name='dataset_creation')
 
     @logger_time_stamp
+    def create_pvutil_dataset(self, dir_count, test):
+        """
+        method responsible for creating pv util cases
+        playbook_path: /mpqe-scale-scripts/mtc-helpers/data-generator/playbooks/playbook_case1.yml
+    image: quay.io/tzahia/datagen:latest
+    dir_count: 5
+    files_count: 1000000
+    files_size: 100
+    dept_count: 1
+    pvc_size: 80Gi
+    sc: ocs-storagecluster-ceph-rbd
+     ansible-playbook {playbook_path} --extra-vars “dir_count={test['dataset']['dir_count']} files_count={test['dataset']['files_count']} files_size={test['dataset']['files_size']} dept_count={test['dataset']['dept_count']} pvc_size={test['dataset']['pvc_size']}”
+        """
+        print (f'{dir_count}')
+        cmd_output = self.__ssh.run(cmd=f'ansible-playbook --version')
+        cmdtzahi = (f"ansible-playbook {test['dataset']['playbook_path']} --extra-vars \“dir_count={test['dataset']['dir_count']} files_count={test['dataset']['files_count']} files_size={test['dataset']['files_size']} dept_count={test['dataset']['dept_count']} pvc_size={test['dataset']['pvc_size']}")
+        playbook_extra_var = (f"dir_count={test['dataset']['dir_count']} files_count={test['dataset']['files_count']} files_size={test['dataset']['files_size']} dept_count={test['dataset']['dept_count']} pvc_size={test['dataset']['pvc_size']}")
+        playbook_path = test['dataset']['playbook_path']
+        cmd_output2 = self.__ssh.run(cmd=f'ansible-playbook {playbook_path} --extra-vars "{playbook_extra_var}"')
+
+    @logger_time_stamp
     def get_oadp_custom_resources(self, cr_type, ns='openshift-adp'):
         """
         This method return backups as list
@@ -358,7 +379,7 @@ class OadpWorkloads(WorkloadsOperations):
     def oadp_restore(self, plugin, restore_name, backup_name):
         """
         this method is for restoring oadp backups
-        """
+      os  """
         #              cmd: "oc -n openshift-adp exec deployment/velero -c velero -it -- ./velero restore create {{restore_name}}  --from-backup {{backup_name}}"
         restore_cmd = self.__ssh.run(
             cmd=f'oc -n openshift-adp exec deployment/velero -c velero -it -- ./velero restore create {restore_name} --from-backup {backup_name}')
@@ -893,6 +914,9 @@ class OadpWorkloads(WorkloadsOperations):
         """
         # Load Scenario Details
         test_scenario = self.load_test_scenario()
+
+        # just for testing how the dataset is parsed
+        self.create_pvutil_dataset(dir_count=test_scenario['dataset']['dir_count'], test=test_scenario)
 
         # Get OADP, Velero, Storage Details
         self.oadp_get_version_info()
