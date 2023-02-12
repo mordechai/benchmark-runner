@@ -30,7 +30,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__namespace = self._environment_variables_dict.get('namespace', '')
         self.__oadp_workload = self._environment_variables_dict.get('oadp', '')
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
-        self.__oadp_scenario_name = 'restore-csi-busybox-perf-single-100-pods-rbd'
+        self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-10-pods-rbd'
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
@@ -66,53 +66,26 @@ class OadpWorkloads(WorkloadsOperations):
         with open('/tmp/oadp-report.json', 'w', encoding='utf-8') as f:
             json.dump(self.__run_metadata, f, indent=4, sort_keys=True, default=str)
 
+
     @logger_time_stamp
     def upload_oadp_result_to_elasticsearch(self):
         """
         This method upload to ElasticSearch the results
         :return:
         """
+        datetime_format = '%Y-%m-%d %H:%M:%S'
         result_report_json_file = open(self.__result_report)
         result_report_json_str = result_report_json_file.read()
         result_report_json_data = json.loads(result_report_json_str)
-        # for workload, oadp_tests in result_report_json_data.items():
-        #     if self._run_type == 'test_ci':
-        #         index = f'oadp-{workload}-test-ci-results'
-        #     elif self._run_type == 'release':
-        #         index = f'oadp-{workload}-release-results'
-        #     else:
-        #         index = f'oadp-{workload}-results'
         index = self.__run_metadata['index']
         logger.info(f'upload index: {index}')
-        metadata_details = {'uuid': self._environment_variables_dict['uuid'], 'run_artifacts_url': os.path.join(self._run_artifacts_url,f'{self._get_run_artifacts_hierarchy(workload_name=self._workload, is_file=True)}-{self._time_stamp_format}.tar.gz')}
+        metadata_details = {'uuid': self._environment_variables_dict['uuid'], 'upload_date': datetime.now().strftime(datetime_format), 'run_artifacts_url': os.path.join(self._run_artifacts_url,f'{self._get_run_artifacts_hierarchy(workload_name=self._workload, is_file=True)}-{self._time_stamp_format}.tar.gz'), 'scenario': self.__run_metadata['summary']['runtime']['name']}
         # run artifacts data
         result_report_json_data['metadata'] = {}
         result_report_json_data['metadata'].update(metadata_details)
 
-        # run artifacts data
-        # result_report_json_data['metadata']['run_artifacts_url'] = os.path.join(self._run_artifacts_url,f'{self._get_run_artifacts_hierarchy(workload_name=self._workload, is_file=True)}-{self._time_stamp_format}.tar.gz')
         self._es_operations.upload_to_elasticsearch(index=index, data=result_report_json_data)
-        self._es_operations.verify_elasticsearch_data_uploaded(index=index, uuid=result_report_json_data['metadata']['uuid'])
-        # for workload, oadp_tests in result_report_json_data.items():
-        #     if workload != 'metadata':
-        #         logger.info(f'workload: {workload} oadp_tests {oadp_tests} and bool(oadp_tests): {bool(oadp_tests)}')
-                # if bool(result_report_json_data[workload]):
-                    # self._es_operations.upload_to_elasticsearch(index=index, data=result_report_json_data[workload])
-                # breaking result to partial
-                # for oadp_test in oadp_tests:
-                #     mykeys = oadp_tests.keys()
-                #     if (oadp_test != 'resources') and (oadp_test != 'transactions'):
-                #         print(f'oadp_test: {oadp_test}')
-                #         print(f'oadp_tests[oadp_test]: {oadp_tests[oadp_test]}')
-                #         self._es_operations.upload_to_elasticsearch(index=index, data=oadp_tests[oadp_test])
-                # metadata
-            # elif workload == 'metadata':
-            #     # run artifacts data
-            #     result_report_json_data['metadata']['run_artifacts_url'] = os.path.join(self._run_artifacts_url,
-            #                                                                             f'{self._get_run_artifacts_hierarchy(workload_name=self._workload, is_file=True)}-{self._time_stamp_format}.tar.gz')
-            #     self._es_operations.upload_to_elasticsearch(index=index, data=result_report_json_data['metadata'])
-            #     self._es_operations.verify_elasticsearch_data_uploaded(index=index,
-            #                                                            uuid=result_report_json_data['metadata']['uuid'])
+        # self._es_operations.verify_elasticsearch_data_uploaded(index=index, uuid=result_report_json_data['metadata']['uuid'])
 
     @logger_time_stamp
     def get_logs_by_pod_ns(self, namespace):
@@ -983,14 +956,14 @@ class OadpWorkloads(WorkloadsOperations):
 
         # Get Pod Resource prior to test
         self.get_resources_per_ns(namespace='openshift-adp', label="start")
-        self.get_resources_per_ns(namespace='openshift-storage', label="start")
+        # self.get_resources_per_ns(namespace='openshift-storage', label="start")
 
         # Launch OADP scenario
         self.oadp_execute_scenario(test_scenario, run_method='python')
 
         # Get Pod Resource after the test
         self.get_resources_per_ns(namespace='openshift-adp', label="end")
-        self.get_resources_per_ns(namespace='openshift-storage', label="end")
+        # self.get_resources_per_ns(namespace='openshift-storage', label="end")
 
         # Parse result CR for status, and timestamps
         self.parse_oadp_cr(ns='openshift-adp', cr_type=test_scenario['args']['OADP_CR_TYPE'],
