@@ -30,7 +30,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__namespace = self._environment_variables_dict.get('namespace', '')
         self.__oadp_workload = self._environment_variables_dict.get('oadp', '')
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
-        self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-10-pods-rbd'
+        self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-7-pods-rbd'
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
@@ -42,6 +42,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__run_metadata = {
             "index": '',
             "metadata": {},
+            "status": '',
             "summary": {
                 "env": {
                     "ocp": {},
@@ -85,7 +86,6 @@ class OadpWorkloads(WorkloadsOperations):
         result_report_json_data['metadata'].update(metadata_details)
 
         self._es_operations.upload_to_elasticsearch(index=index, data=result_report_json_data)
-        # self._es_operations.verify_elasticsearch_data_uploaded(index=index, uuid=result_report_json_data['metadata']['uuid'])
 
     @logger_time_stamp
     def get_logs_by_pod_ns(self, namespace):
@@ -376,9 +376,9 @@ class OadpWorkloads(WorkloadsOperations):
         if plugin == 'csi':
             backup_cmd = self.__ssh.run(
                 cmd=f'oc -n openshift-adp exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup}')
-        if backup_cmd.find('submitted successfully') < 0:
+        if backup_cmd.find('submitted successfully') == 0:
             print("Error backup was not successfully started")
-            # todo Add failure flow to if backup cli command failed in func oadp_create_backup
+            logger.error("Error backup was not successfully started")
 
     @logger_time_stamp
     def wait_for_condition_of_oadp_cr(self, cr_type, cr_name, testcase_timeout=3600):
@@ -649,6 +649,14 @@ class OadpWorkloads(WorkloadsOperations):
             self.__run_metadata['summary']['runtime']['results'] = {}
             self.__run_metadata['summary']['runtime']['results'].update(cr_info)
             self.__result_dicts.append(self.__run_metadata['summary']['runtime']['results'])
+
+    @logger_time_stamp
+    def set_run_status(self):
+        """
+        method for setting status of run
+        """
+        sample =  self.__run_metadata['summary']['runtime']['results'].get('cr_status', 'error')
+        self.__run_metadata['status'] = self.__run_metadata['summary']['runtime']['results'].get('cr_status', 'error')
 
     @logger_time_stamp
     def get_resources_per_pod(self, podname, namespace, label=''):
@@ -974,7 +982,11 @@ class OadpWorkloads(WorkloadsOperations):
 
         # Get OCP node info
         self.collect_all_node_resource()
+
+        # Set Run Status
+        self.set_run_status()
         self.create_json_summary()
+
         if os.path.exists(os.path.join(self.__result_report)) and not os.stat(self.__result_report).st_size == 0:
             self.__ssh.run(cmd=f'cp {self.__result_report} {self._run_artifacts_path}')
             return True
