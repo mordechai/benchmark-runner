@@ -24,13 +24,13 @@ class OadpWorkloads(WorkloadsOperations):
         super().__init__()
         self.__oadp_path = '/tmp/mpqe-scale-scripts/mtc-helpers/busybox'
         self.__oadp_base_dir = '/tmp/mpqe-scale-scripts/oadp-helpers'
-        self.__oadp_scenario_data = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/internal_data/single_ns.yaml'
+        self.__oadp_scenario_data = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/internal_data/tests.yaml' # single_ns.yaml'
         self.__oadp_promql_queries = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/metrics/metrics-oadp.yaml'
         # environment variables
         self.__namespace = self._environment_variables_dict.get('namespace', '')
         self.__oadp_workload = self._environment_variables_dict.get('oadp', '')
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
-        self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-7-pods-rbd'
+        self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','backup-csi-busybox-perf-single-100-pods-rbd')
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
@@ -262,7 +262,6 @@ class OadpWorkloads(WorkloadsOperations):
             cmd=f'oc get pods -n {target_namespace} --field-selector status.phase=Running --no-headers -o custom-columns=":metadata.name"')
         if running_pods != '':
             list_of_running_pods = running_pods.split('\n')
-            print('running_pods detected in {namespace} are: {running_pods} expected {num_of_pods_expected}')
             if len(list_of_running_pods) == num_of_pods_expected:
                 print("expected dataset is present")
                 return True
