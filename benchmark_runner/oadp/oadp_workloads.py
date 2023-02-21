@@ -30,7 +30,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__namespace = self._environment_variables_dict.get('namespace', '')
         self.__oadp_workload = self._environment_variables_dict.get('oadp', '')
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
-        self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','backup-csi-busybox-perf-single-100-pods-rbd')
+        self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','backup-csi-busybox-perf-single-10-pods-rbd') #'oadp_scenario','backup-csi-busybox-perf-single-10-pods-rbd'
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
@@ -706,9 +706,13 @@ class OadpWorkloads(WorkloadsOperations):
                 print (f'correct name is {fullname}')
                 return fullname
             else:
-                # if len(pod_parts) == 2:
-                base_name += part + "-"
-                print (f"base_name patial is {base_name}")
+                # Handle non-digit based pod names eg: node-agent-vzbgg note how vzbgg doesnt contain digit
+                if pod_parts[-1] != part:
+                    base_name += part + "-"
+                    print (f"base_name patial is {base_name}")
+                else:
+                    fullname = base_name[:-1]
+                    return fullname
         # if no return has already happened then podname doesnt contain digit
         # so we parse on - and assume last part of name is unique char string that we dont care about
         # csi-cephfsplugin-provisioner-asdf ==> return csi-cephfsplugin-provisioner
@@ -877,19 +881,23 @@ class OadpWorkloads(WorkloadsOperations):
         base_pod_name = self.calc_pod_basename(pod_name)
         if base_pod_name not in self.__oadp_resources.keys():
             self.__oadp_resources[base_pod_name] = {}
-            self.__oadp_runtime_resource_mapping[pod_name] = f"{base_pod_name}_0"
+            # self.__oadp_runtime_resource_mapping[pod_name] = f"{base_pod_name}-0"
+            self.__oadp_runtime_resource_mapping[pod_name] = f"{base_pod_name}"
             # self.__oadp_resources[base_name] =  {"base_name": base_pod_name}
             print(f'key {base_pod_name} not in {self.__oadp_resources.keys} ')
         else:
             if base_pod_name in self.__oadp_resources.keys():
                 count = 1
                 for key, value in self.__oadp_resources.items():
-                    if base_pod_name.lower() in key.lower():
+                    short_name = key.rsplit('-', 1)
+                    short_name = short_name[0]
+                    if base_pod_name.lower() == short_name.lower():
+                    # if base_pod_name.lower() in key.lower():
                         count += 1
                         print (f" base_pod_name: {base_pod_name} key: {key} value: {value}  and count value is : {count}" )
                         print ("here")
-                self.__oadp_resources[f"{base_pod_name}_{count - 1}"] = {}
-                self.__oadp_runtime_resource_mapping[pod_name] = f"{base_pod_name}_{count - 1}"
+                self.__oadp_resources[f"{base_pod_name}-{count - 1}"] = {}
+                self.__oadp_runtime_resource_mapping[pod_name] = f"{base_pod_name}-{count - 1}"
 
     @logger_time_stamp
     @prometheus_metrics(yaml_full_path='/tmp/mpqe-scale-scripts/oadp-helpers/templates/metrics/metrics-oadp.yaml')
@@ -963,14 +971,14 @@ class OadpWorkloads(WorkloadsOperations):
 
         # Get Pod Resource prior to test
         self.get_resources_per_ns(namespace='openshift-adp', label="start")
-        # self.get_resources_per_ns(namespace='openshift-storage', label="start")
+        self.get_resources_per_ns(namespace='openshift-storage', label="start")
 
         # Launch OADP scenario
         self.oadp_execute_scenario(test_scenario, run_method='python')
 
         # Get Pod Resource after the test
         self.get_resources_per_ns(namespace='openshift-adp', label="end")
-        # self.get_resources_per_ns(namespace='openshift-storage', label="end")
+        self.get_resources_per_ns(namespace='openshift-storage', label="end")
 
         # Parse result CR for status, and timestamps
         self.parse_oadp_cr(ns='openshift-adp', cr_type=test_scenario['args']['OADP_CR_TYPE'],
