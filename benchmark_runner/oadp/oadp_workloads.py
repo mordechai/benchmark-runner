@@ -24,13 +24,13 @@ class OadpWorkloads(WorkloadsOperations):
         super().__init__()
         self.__oadp_path = '/tmp/mpqe-scale-scripts/mtc-helpers/busybox'
         self.__oadp_base_dir = '/tmp/mpqe-scale-scripts/oadp-helpers'
-        self.__oadp_scenario_data = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/internal_data/tests.yaml' # single_ns.yaml'
+        self.__oadp_scenario_data = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/internal_data/single_ns.yaml' # single_ns.yaml'
         self.__oadp_promql_queries = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/metrics/metrics-oadp.yaml'
         # environment variables
         self.__namespace = self._environment_variables_dict.get('namespace', '')
         self.__oadp_workload = self._environment_variables_dict.get('oadp', '')
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
-        self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','backup-csi-busybox-perf-single-10-pods-rbd') #'oadp_scenario','backup-csi-busybox-perf-single-10-pods-rbd'
+        self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-100-pods-rbd' #self._environment_variables_dict.get('oadp_scenario','backup-csi-busybox-perf-single-10-pods-rbd') #'oadp_scenario','backup-csi-busybox-perf-single-10-pods-rbd'
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
@@ -414,6 +414,20 @@ class OadpWorkloads(WorkloadsOperations):
             return True
         else:
             return False
+
+    @logger_time_stamp
+    def set_volume_snapshot_class(self, sc):
+        """
+        Sets volume snapshot class per storage
+        """
+        if sc == 'ocs-storagecluster-ceph-rbd':
+            cmd_set_volume_snapshot_class = self.__ssh.run(cmd=f"oc apply -f {self.__oadp_base_dir}/vsc-cephRBD.yaml")
+        if sc == 'ocs-storagecluster-cephfs':
+            cmd_set_volume_snapshot_class = self.__ssh.run(cmd=f"oc apply -f {self.__oadp_base_dir}/vsc-cephFS.yaml")
+        expected_result_output = ['created', 'unchanged', 'configured']
+        if any(ext in cmd_set_volume_snapshot_class for ext in expected_result_output) == False:
+            print(f"Unable to set volume-snapshot-class {sc} ")
+            logger.exception(f"Unable to set volume-snapshot-class {sc}")
 
     @logger_time_stamp
     def set_default_storage_class(self,sc):
@@ -938,8 +952,9 @@ class OadpWorkloads(WorkloadsOperations):
         expected_sc = test_scenario['dataset']['sc']
         expected_size = test_scenario['dataset']['pv_size']
 
-        # Verify desired storage is default storage class and others are non default
+        # Verify desired storage is default storage class and volumesnapshotclass
         self.set_default_storage_class(expected_sc)
+        self.set_volume_snapshot_class(expected_sc)
 
         # when performing backup
         # Check if source namespace aka our dataset is preseent, if dataset not prsent then create it
