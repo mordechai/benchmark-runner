@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 from benchmark_runner.common.ssh.ssh import SSH
-from benchmark_runner.clusterbuster.clusterbuster_exceptions import MissingResultReport, MissingElasticSearch
+from benchmark_runner.oadp.oadp_exceptions import MissingResultReport, MissingElasticSearch
 from benchmark_runner.common.logger.logger_time_stamp import logger_time_stamp, logger
 from benchmark_runner.workloads.workloads_operations import WorkloadsOperations
 from benchmark_runner.common.prometheus.prometheus_metrics import prometheus_metrics
