@@ -30,7 +30,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__namespace = self._environment_variables_dict.get('namespace', '')
         self.__oadp_workload = self._environment_variables_dict.get('oadp', '')
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
-        self.__oadp_scenario_name = 'backup-restic-pvc_utlization-2-1-0-rbd'
+        self.__oadp_scenario_name = 'backup-restic-pvc_utlization-2-2-1-rbd' #'backup-restic-pvc_utlization-2-1-0-rbd' #'backup-restic-pvc_utlization-2-3-0-rbd' backup-restic-pvc_utlization-2-2-1-rbd
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
@@ -327,25 +327,47 @@ class OadpWorkloads(WorkloadsOperations):
         self.oadp_timer(action="stop", transaction_name='dataset_creation')
 
     @logger_time_stamp
-    def create_pvutil_dataset(self, dir_count, test):
-        """
-        method responsible for creating pv util cases
-        playbook_path: /mpqe-scale-scripts/mtc-helpers/data-generator/playbooks/playbook_case1.yml
-    image: quay.io/tzahia/datagen:latest
-    dir_count: 5
-    files_count: 1000000
-    files_size: 100
-    dept_count: 1
-    pvc_size: 80Gi
-    sc: ocs-storagecluster-ceph-rbd
-     ansible-playbook {playbook_path} --extra-vars “dir_count={test['dataset']['dir_count']} files_count={test['dataset']['files_count']} files_size={test['dataset']['files_size']} dept_count={test['dataset']['dept_count']} pvc_size={test['dataset']['pvc_size']}”
-        """
-        print (f'{dir_count}')
-        cmd_output = self.__ssh.run(cmd=f'ansible-playbook --version')
-        cmdtzahi = (f"ansible-playbook {test['dataset']['playbook_path']} --extra-vars \“dir_count={test['dataset']['dir_count']} files_count={test['dataset']['files_count']} files_size={test['dataset']['files_size']} dept_count={test['dataset']['dept_count']} pvc_size={test['dataset']['pvc_size']}")
-        playbook_extra_var = (f"dir_count={test['dataset']['dir_count']} files_count={test['dataset']['files_count']} files_size={test['dataset']['files_size']} dept_count={test['dataset']['dept_count']} pvc_size={test['dataset']['pvc_size']}")
-        playbook_path = test['dataset']['playbook_path']
-        cmd_output2 = self.__ssh.run(cmd=f'ansible-playbook {playbook_path} --extra-vars "{playbook_extra_var}"')
+    def create_pvutil_dataset(self, test_scenario):
+        active_role = test_scenario['dataset']['role']
+        playbook_path = test_scenario['dataset']['playbook_path']
+        pvc_size = test_scenario['dataset']['pvc_size']
+        dataset_path = test_scenario['dataset']['dataset_path']
+        if active_role == 'generator':
+            dir_count = test_scenario['dataset']['dir_count']
+            files_count = test_scenario['dataset']['files_count']
+            file_size = test_scenario['dataset']['files_size']
+            dept_count = test_scenario['dataset']['dept_count']
+            playbook_extra_var = (f"dir_count={dir_count}  files_count={files_count}  files_size={file_size}  dept_count={dept_count}  pvc_size={pvc_size}  dataset_path={dataset_path}")
+            create_data_py = self.__ssh.run(cmd=f"ansible-playbook {playbook_path}  --extra-vars  '{playbook_extra_var}' -vvv")
+        elif active_role == 'dd_generator':
+            bs = test_scenario['dataset']['bs']
+            count = test_scenario['dataset']['count']
+            playbook_extra_var = (f"bs={bs} count={count}  pvc_size={pvc_size}  dataset_path={dataset_path}")
+            create_data_dd = self.__ssh.run(cmd=f"ansible-playbook {playbook_path}  --extra-vars  '{playbook_extra_var}' -vvv")
+        else:
+            logger.info("role doesnt define")
+    @logger_time_stamp
+    def get_capacity_usage(self, test_scenario):
+        active_role = test_scenario['dataset']['role']
+        mount_point = test_scenario['dataset']['dataset_path']
+        namespace = test_scenario['args']['namespaces_to_backup']
+        podname = self.__ssh.run(cmd=f"oc get pods -o custom-columns=POD:.metadata.name --no-headers -n{namespace}")
+        disk_capacity = self.__ssh.run(cmd=f"oc  exec -it -n{namespace} {podname} -- /bin/bash -c \"du -sh {mount_point}\"")
+        current_disk_capacity = disk_capacity.split('\n')[-1].split('\t')[0]
+        files_count = self.__ssh.run(cmd=f"oc  exec -it -n{test_scenario['args']['namespaces_to_backup']} {podname} -- /bin/bash -c \"find {mount_point} -type f -name \"my-random-file-*\" -o -name \"dd_file\" |wc -l\"")
+        current_files_count = files_count.split('\n')[-1].split('\t')[0]
+        #folder_dept =
+        logger.info(current_files_count)
+
+    def get_expected_files_count(self, test_scenario):
+        dir_count = test_scenario['dataset']['dir_count']
+        files_count = test_scenario['dataset']['files_count']
+        dept_count = test_scenario['dataset']['dept_count']
+
+        files = (dir_count ** dept_count) * files_count
+        logger.info(files)
+
+
 
     @logger_time_stamp
     def get_oadp_custom_resources(self, cr_type, ns='openshift-adp'):
@@ -962,9 +984,12 @@ class OadpWorkloads(WorkloadsOperations):
         """
         # Load Scenario Details
         test_scenario = self.load_test_scenario()
-
         # just for testing how the dataset is parsed
-        self.create_pvutil_dataset(dir_count=test_scenario['dataset']['dir_count'], test=test_scenario)
+        self.create_pvutil_dataset(test_scenario)
+        # just for testing how the capacity is parsed
+        self.get_capacity_usage(test_scenario)
+        self.get_expected_files_count(test_scenario)
+
 
         # Get OADP, Velero, Storage Details
         self.oadp_get_version_info()
