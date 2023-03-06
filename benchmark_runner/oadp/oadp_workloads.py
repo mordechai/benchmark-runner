@@ -30,7 +30,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__namespace = self._environment_variables_dict.get('namespace', '')
         self.__oadp_workload = self._environment_variables_dict.get('oadp', '')
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
-        self.__oadp_scenario_name = 'backup-restic-pvc_utlization-2-2-1-rbd' #'backup-restic-pvc_utlization-2-1-0-rbd' #'backup-restic-pvc_utlization-2-3-0-rbd' backup-restic-pvc_utlization-2-2-1-rbd
+        self.__oadp_scenario_name = 'backup-restic-pvc_utlization-2-2-1-rbd'
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
@@ -354,18 +354,32 @@ class OadpWorkloads(WorkloadsOperations):
         podname = self.__ssh.run(cmd=f"oc get pods -o custom-columns=POD:.metadata.name --no-headers -n{namespace}")
         disk_capacity = self.__ssh.run(cmd=f"oc  exec -it -n{namespace} {podname} -- /bin/bash -c \"du -sh {mount_point}\"")
         current_disk_capacity = disk_capacity.split('\n')[-1].split('\t')[0]
-        files_count = self.__ssh.run(cmd=f"oc  exec -it -n{test_scenario['args']['namespaces_to_backup']} {podname} -- /bin/bash -c \"find {mount_point} -type f -name \"my-random-file-*\" -o -name \"dd_file\" |wc -l\"")
+        files_count = self.__ssh.run(cmd=f"oc  exec -it -n{namespace} {podname} -- /bin/bash -c \"find {mount_point}* -type f -name \"my-random-file-*\" -o -name \"dd_file\" |wc -l\"")
         current_files_count = files_count.split('\n')[-1].split('\t')[0]
-        #folder_dept =
-        logger.info(current_files_count)
+        folders_count = self.__ssh.run(cmd=f"oc  exec -it -n{namespace} {podname} -- /bin/bash -c \"find {mount_point}* -type d  |wc -l\"")
+        current_folders_count = folders_count.split('\n')[-1].split('\t')[0]
+        logger.info("done")
 
     def get_expected_files_count(self, test_scenario):
-        dir_count = test_scenario['dataset']['dir_count']
+        import math
+        active_role = test_scenario['dataset']['role']
+        dir_count = test_scenario['dataset']['dir_count'] # -n
         files_count = test_scenario['dataset']['files_count']
-        dept_count = test_scenario['dataset']['dept_count']
+        dept_count = test_scenario['dataset']['dept_count'] # -d
+        if active_role == 'generator':
+            countdir = 0
+            for k in range(dept_count):
+                countdir += math.pow(dept_count, k)
+            countfile = int(math.pow(dept_count, (dept_count - 1)) * files_count)
+            total_files = int(countfile * dir_count)
+            total_folders = int(countdir * dir_count)
+            logger.info(total_folders, total_files)
+        elif active_role == 'dd_generator':
+             bs = test_scenario['dataset']['bs']
+             count = test_scenario['dataset']['count']
+             current_file_size = bs * count
 
-        files = (dir_count ** dept_count) * files_count
-        logger.info(files)
+
 
 
 
@@ -396,6 +410,8 @@ class OadpWorkloads(WorkloadsOperations):
                     self.__run_metadata['summary']['transactions'][trans]['stopped_at'] = time_end
                     self.__run_metadata['summary']['transactions'][trans]['duration'] = str(
                         time_end - self.__run_metadata['summary']['transactions'][trans]['start_at'])
+
+
     @logger_time_stamp
     def oadp_restore(self, plugin, restore_name, backup_name):
         """
@@ -927,8 +943,8 @@ class OadpWorkloads(WorkloadsOperations):
                 self.oadp_timer(action="start", transaction_name=f"{test_scenario['args']['OADP_CR_NAME']}")
                 self.oadp_create_backup(plugin=test_scenario['args']['plugin'], backup_name=test_scenario['args']['backup_name'], namespaces_to_backup=test_scenario['args']['namespaces_to_backup'])
                 self.wait_for_condition_of_oadp_cr(cr_type=test_scenario['args']['OADP_CR_TYPE'],
-                                               cr_name=test_scenario['args']['OADP_CR_NAME'],
-                                               testcase_timeout=test_scenario['args']['testcase_timeout'])
+                                                   cr_name=test_scenario['args']['OADP_CR_NAME'],
+                                                   testcase_timeout=test_scenario['args']['testcase_timeout'])
                 self.oadp_timer(action="stop", transaction_name=f"{test_scenario['args']['OADP_CR_NAME']}")
             if test_scenario['args']['OADP_CR_TYPE'] == 'restore':
                 self.oadp_timer(action="start", transaction_name=f"{test_scenario['args']['OADP_CR_NAME']}")
@@ -984,9 +1000,7 @@ class OadpWorkloads(WorkloadsOperations):
         """
         # Load Scenario Details
         test_scenario = self.load_test_scenario()
-        # just for testing how the dataset is parsed
         self.create_pvutil_dataset(test_scenario)
-        # just for testing how the capacity is parsed
         self.get_capacity_usage(test_scenario)
         self.get_expected_files_count(test_scenario)
 
@@ -1005,7 +1019,7 @@ class OadpWorkloads(WorkloadsOperations):
         namespace = test_scenario['args']['namespaces_to_backup']
         # namespace = f'busybox-perf-single-ns-{num_of_assets_desired}-pods'
         # Check if this is a single or multi name space scenario
-         # if test_scenario['dataset']['total_namespaces'] == 1:
+        # if test_scenario['dataset']['total_namespaces'] == 1:
         #     num_of_assets_desired: int = test_scenario['dataset']['pods_per_ns']
         #     namespace = test_scenario['args']['namespaces_to_backup']
         #     # namespace = f'busybox-perf-single-ns-{num_of_assets_desired}-pods'
