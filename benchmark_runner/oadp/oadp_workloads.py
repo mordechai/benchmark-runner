@@ -340,33 +340,41 @@ class OadpWorkloads(WorkloadsOperations):
             dept_count = test_scenario['dataset']['dept_count']
             playbook_extra_var = (f"dir_count={dir_count}  files_count={files_count}  files_size={file_size}  dept_count={dept_count}  pvc_size={pvc_size}  dataset_path={dataset_path}")
             create_data_py = self.__ssh.run(cmd=f"ansible-playbook {playbook_path}  --extra-vars  '{playbook_extra_var}' -vvv")
+            logger.info(create_data_py)
         elif active_role == 'dd_generator':
             bs = test_scenario['dataset']['bs']
             count = test_scenario['dataset']['count']
             playbook_extra_var = (f"bs={bs} count={count}  pvc_size={pvc_size}  dataset_path={dataset_path}")
             create_data_dd = self.__ssh.run(cmd=f"ansible-playbook {playbook_path}  --extra-vars  '{playbook_extra_var}' -vvv")
+            logger.info(create_data_dd)
         else:
             logger.info("role doesnt define")
     @logger_time_stamp
     def get_capacity_usage(self, test_scenario):
+        results_capacity_usage = {}
         active_role = test_scenario['dataset']['role']
         mount_point = test_scenario['dataset']['dataset_path']
         namespace = test_scenario['args']['namespaces_to_backup']
         podname = self.__ssh.run(cmd=f"oc get pods -o custom-columns=POD:.metadata.name --no-headers -n{namespace}")
         disk_capacity = self.__ssh.run(cmd=f"oc  exec -it -n{namespace} {podname} -- /bin/bash -c \"du -sh {mount_point}\"")
         current_disk_capacity = disk_capacity.split('\n')[-1].split('\t')[0]
+        results_capacity_usage['disk_capacity'] = current_disk_capacity
         files_count = self.__ssh.run(cmd=f"oc  exec -it -n{namespace} {podname} -- /bin/bash -c \"find {mount_point}* -type f -name \"my-random-file-*\" -o -name \"dd_file\" |wc -l\"")
         current_files_count = files_count.split('\n')[-1].split('\t')[0]
+        results_capacity_usage['files_count'] = current_files_count
         folders_count = self.__ssh.run(cmd=f"oc  exec -it -n{namespace} {podname} -- /bin/bash -c \"find {mount_point}* -type d  |wc -l\"")
         current_folders_count = folders_count.split('\n')[-1].split('\t')[0]
-        logger.info("done")
+        results_capacity_usage['folders_count'] = current_folders_count
+        logger.info(results_capacity_usage)
 
     def get_expected_files_count(self, test_scenario):
+        results_capacity_expected = {}
         import math
         active_role = test_scenario['dataset']['role']
         dir_count = test_scenario['dataset']['dir_count'] # -n
         files_count = test_scenario['dataset']['files_count']
         dept_count = test_scenario['dataset']['dept_count'] # -d
+        active_role = 'dd_generator'
         if active_role == 'generator':
             countdir = 0
             for k in range(dept_count):
@@ -374,15 +382,14 @@ class OadpWorkloads(WorkloadsOperations):
             countfile = int(math.pow(dept_count, (dept_count - 1)) * files_count)
             total_files = int(countfile * dir_count)
             total_folders = int(countdir * dir_count)
+            results_capacity_expected['expected_files'] = total_files
+            results_capacity_expected['expected_folders'] = total_folders
             logger.info(total_folders, total_files)
+            logger.info(results_capacity_expected)
         elif active_role == 'dd_generator':
              bs = test_scenario['dataset']['bs']
              count = test_scenario['dataset']['count']
              current_file_size = bs * count
-
-
-
-
 
     @logger_time_stamp
     def get_oadp_custom_resources(self, cr_type, ns='openshift-adp'):
