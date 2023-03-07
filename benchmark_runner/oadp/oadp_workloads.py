@@ -389,6 +389,8 @@ class OadpWorkloads(WorkloadsOperations):
              bs = test_scenario['dataset']['bs']
              count = test_scenario['dataset']['count']
              current_file_size = bs * count
+    def capacity_usage_and_capacity_expected_comparison(self, results_capacity_expected, results_capacity_usage):
+
 
     @logger_time_stamp
     def get_oadp_custom_resources(self, cr_type, ns='openshift-adp'):
