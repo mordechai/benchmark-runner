@@ -30,7 +30,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__namespace = self._environment_variables_dict.get('namespace', '')
         self.__oadp_workload = self._environment_variables_dict.get('oadp', '')
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
-        self.__oadp_scenario_name = 'backup-restic-pvc_utlization-2-2-1-rbd'
+        self.__oadp_scenario_name = 'backup-restic-pvc_utlization-2-1-0-rbd'
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
@@ -349,7 +349,7 @@ class OadpWorkloads(WorkloadsOperations):
         else:
             logger.info("role doesnt define")
     @logger_time_stamp
-    def get_capacity_usage(self, test_scenario):
+    def get_pod_pv_utilization_info(self, test_scenario):
         results_capacity_usage = {}
         active_role = test_scenario['dataset']['role']
         mount_point = test_scenario['dataset']['dataset_path']
@@ -364,15 +364,17 @@ class OadpWorkloads(WorkloadsOperations):
         folders_count = self.__ssh.run(cmd=f"oc  exec -it -n{namespace} {podname} -- /bin/bash -c \"find {mount_point}python/* -type d  |wc -l\"")
         current_folders_count = folders_count.split('\n')[-1].split('\t')[0]
         results_capacity_usage['folders_count'] = current_folders_count
-        logger.info(results_capacity_usage)
+        results_capacity_usage['active_role'] = active_role
+        return results_capacity_usage
 
     def get_expected_files_count(self, test_scenario):
         results_capacity_expected = {}
         import math
         active_role = test_scenario['dataset']['role']
         dir_count = test_scenario['dataset']['dir_count'] # -n
-        files_count = test_scenario['dataset']['files_count']
+        files_count = test_scenario['dataset']['files_count'] # -f
         dept_count = test_scenario['dataset']['dept_count'] # -d
+        file_size = test_scenario['dataset']['files_size'] # -s
         if active_role == 'generator':
             countdir = 0
             for k in range(dept_count):
@@ -380,19 +382,18 @@ class OadpWorkloads(WorkloadsOperations):
             countfile = int(math.pow(dept_count, (dept_count - 1)) * files_count)
             total_files = int(countfile * dir_count)
             total_folders = int(countdir * dir_count)
-            total_capacity = '29G'
-            results_capacity_expected['expected_capacity'] = total_capacity
-            results_capacity_expected['expected_files'] = total_files
-            results_capacity_expected['expected_folders'] = total_folders
-            logger.info(total_folders, total_files)
+            disk_capacity = '29G'
+            results_capacity_expected['disk_capacity'] = disk_capacity
+            results_capacity_expected['files_count'] = total_files
+            results_capacity_expected['folders_count'] = total_folders
+            logger.info(f"{total_folders} {total_files}")
             logger.info(results_capacity_expected)
         elif active_role == 'dd_generator':
              bs = test_scenario['dataset']['bs']
              count = test_scenario['dataset']['count']
              current_file_size = bs * count
-    def capacity_usage_and_capacity_expected_comparison(self, results_capacity_expected, results_capacity_usage):
-        print(results_capacity_expected)
-        print(results_capacity_usage)
+        return results_capacity_expected
+    def capacity_usage_and_expected_comparison(self, results_capacity_expected, results_capacity_usage):
         if len(results_capacity_expected) != len(results_capacity_usage):
             print("Not Equal")
         else:
@@ -1026,9 +1027,9 @@ class OadpWorkloads(WorkloadsOperations):
         # Load Scenario Details
         test_scenario = self.load_test_scenario()
 #        self.create_pvutil_dataset(test_scenario)
-        self.get_capacity_usage(test_scenario)
-        self.get_expected_files_count(test_scenario)
-
+        results_capacity_expected = self.get_pod_pv_utilization_info(test_scenario)
+        results_capacity_usage = self.get_expected_files_count(test_scenario)
+        self.capacity_usage_and_expected_comparison(results_capacity_expected, results_capacity_usage)
 
         # Get OADP, Velero, Storage Details
         self.oadp_get_version_info()
