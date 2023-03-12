@@ -979,10 +979,14 @@ class OadpWorkloads(WorkloadsOperations):
         """
         # Load Scenario Details
         test_scenario = self.load_test_scenario()
-        self.create_pvutil_dataset(test_scenario)
         results_capacity_expected = self.get_pod_pv_utilization_info(test_scenario)
         results_capacity_usage = self.get_expected_files_count(test_scenario)
 #        self.capacity_usage_and_expected_comparison(results_capacity_expected, results_capacity_usage)
+#        self.create_pvutil_dataset(test_scenario)
+        results_capacity_expected = self.get_pod_pv_utilization_info(test_scenario)
+        results_capacity_usage = self.get_expected_files_count(test_scenario)
+        self.capacity_usage_and_expected_comparison(results_capacity_expected, results_capacity_usage)
+
 
         # Get OADP, Velero, Storage Details
         self.oadp_get_version_info()
