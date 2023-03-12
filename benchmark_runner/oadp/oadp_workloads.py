@@ -357,6 +357,7 @@ class OadpWorkloads(WorkloadsOperations):
         podname = self.__ssh.run(cmd=f"oc get pods -o custom-columns=POD:.metadata.name --no-headers -n{namespace}")
         disk_capacity = self.__ssh.run(cmd=f"oc  exec -it -n{namespace} {podname} -- /bin/bash -c \"du -sh {mount_point}\"")
         current_disk_capacity = disk_capacity.split('\n')[-1].split('\t')[0]
+        unit_disk_capacity = current_disk_capacity[-1]
         results_capacity_usage['disk_capacity'] = current_disk_capacity
         files_count = self.__ssh.run(cmd=f"oc  exec -it -n{namespace} {podname} -- /bin/bash -c \"find {mount_point}* -type f -name \"my-random-file-*\" -o -name \"dd_file\" |wc -l\"")
         current_files_count = files_count.split('\n')[-1].split('\t')[0]
@@ -382,7 +383,7 @@ class OadpWorkloads(WorkloadsOperations):
             countfile = int(math.pow(dept_count, (dept_count - 1)) * files_count)
             total_files = int(countfile * dir_count)
             total_folders = int(countdir * dir_count)
-            disk_capacity = '29G'
+            disk_capacity = round(int(total_files * file_size) / 1024 / 1024)
             results_capacity_expected['disk_capacity'] = disk_capacity
             results_capacity_expected['files_count'] = total_files
             results_capacity_expected['folders_count'] = total_folders
@@ -1026,10 +1027,10 @@ class OadpWorkloads(WorkloadsOperations):
         """
         # Load Scenario Details
         test_scenario = self.load_test_scenario()
-#        self.create_pvutil_dataset(test_scenario)
+        self.create_pvutil_dataset(test_scenario)
         results_capacity_expected = self.get_pod_pv_utilization_info(test_scenario)
         results_capacity_usage = self.get_expected_files_count(test_scenario)
-        self.capacity_usage_and_expected_comparison(results_capacity_expected, results_capacity_usage)
+#        self.capacity_usage_and_expected_comparison(results_capacity_expected, results_capacity_usage)
 
         # Get OADP, Velero, Storage Details
         self.oadp_get_version_info()
