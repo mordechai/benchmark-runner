@@ -51,7 +51,7 @@ class OadpWorkloads(WorkloadsOperations):
                 "runtime": {},
                 "results": {},
                 "resources": {
-                    "nodes": [],
+                    "nodes": {},
                     "run_time_pods": [],
                     "pods": {}
                 },
@@ -815,11 +815,31 @@ class OadpWorkloads(WorkloadsOperations):
         cmd_output = self.__ssh.run(cmd=f'oc adm top node {ocp_node} --no-headers')
         if cmd_output != '':
             node_adm_result = (list(filter(None, cmd_output.split(' '))))
-            node_details = [{'name': node_adm_result[0], 'cores': node_adm_result[1], 'cpu_per': node_adm_result[2],
-                             'mem_bytes': node_adm_result[3], 'mem_per': node_adm_result[4], "label": '' }]
-            self.__run_metadata['summary']['resources']['nodes'].append(node_details)
-            self.__result_dicts.append(node_details)
-            print(f'node: {ocp_node} {node_adm_result}')
+            worker_name = node_adm_result[0]
+            if worker_name not in self.__run_metadata['summary']['resources']['nodes'].keys():
+                self.__run_metadata['summary']['resources']['nodes'][worker_name] = {'name': node_adm_result[0], 'cores': node_adm_result[1], 'cpu_per': node_adm_result[2],
+                             'mem_bytes': node_adm_result[3], 'mem_per': node_adm_result[4], "label": '' }
+            else:
+                # worker_name exists and need compare func for values
+                self.calc_node_mem_and_cpu_resources_diff(node_adm_result)
+
+    @logger_time_stamp
+    def calc_node_mem_and_cpu_resources_diff(self, adm_node_info):
+        """
+        method calculates diff between node resources via adm and updates dict with results
+        """
+        node = adm_node_info[0]
+        prev_core_total = self.__run_metadata['summary']['resources']['nodes'][node]['cpu_per']
+        prev_core_total = prev_core_total.replace('%', '')
+        current_core = adm_node_info[2].replace('%', '')
+        diff_core = int(current_core) - int(prev_core_total)
+        self.__run_metadata['summary']['resources']['nodes'][node]['core_diff'] = f'{diff_core}%'
+
+        prev_mem_total = self.__run_metadata['summary']['resources']['nodes'][node]['mem_per']
+        prev_mem_total = prev_core_total.replace('%', '')
+        current_mem = adm_node_info[4].replace('%', '')
+        diff_mem = int(current_mem) - int(prev_mem_total)
+        self.__run_metadata['summary']['resources']['nodes'][node]['mem_diff'] = f'{diff_mem}%'
 
     @logger_time_stamp
     def collect_all_node_resource(self):
@@ -830,7 +850,6 @@ class OadpWorkloads(WorkloadsOperations):
         if len(get_node_names.splitlines()) > 0 and 'error' not in get_node_names:
             for bm in get_node_names.splitlines():
                 self.get_node_resource_avail_adm(ocp_node=bm)
-    # todo node resource pre and post run comparison with label=end not complete
 
     @logger_time_stamp
     def get_oadp_velero_and_cr_log(self, cr_name, cr_type):
@@ -984,7 +1003,8 @@ class OadpWorkloads(WorkloadsOperations):
             self.delete_oadp_custom_resources(cr_type=test_scenario['args']['OADP_CR_TYPE'], ns='openshift-adp',
                                               cr_name=test_scenario['args']['OADP_CR_NAME'])
 
-        # Get Pod Resource prior to test
+        # Get Node and Pod Resource prior to test
+        self.collect_all_node_resource()
         self.get_resources_per_ns(namespace='openshift-adp', label="start")
         self.get_resources_per_ns(namespace='openshift-storage', label="start")
 
@@ -992,6 +1012,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.oadp_execute_scenario(test_scenario, run_method='python')
 
         # Get Pod Resource after the test
+        self.collect_all_node_resource()
         self.get_resources_per_ns(namespace='openshift-adp', label="end")
         self.get_resources_per_ns(namespace='openshift-storage', label="end")
 
