@@ -30,7 +30,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__namespace = self._environment_variables_dict.get('namespace', '')
         self.__oadp_workload = self._environment_variables_dict.get('oadp', '')
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
-        self.__oadp_scenario_name = 'backup-restic-pvc_utlization-2-2-1-rbd'
+        self.__oadp_scenario_name = 'backup-restic-pvc_utlization-2-2-9-rbd-swift-3T'
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
@@ -342,7 +342,7 @@ class OadpWorkloads(WorkloadsOperations):
                 else:
                     logger.info('process is still running in container')
                     time.sleep(3)
-                    current_wait_time += 3
+            current_wait_time += 3
         except Exception as err:
             logger.info(f'Error in wait_until_process_inside_pod_completes pod {pod_name} timeout waiting for command {process_text_to_monitor} to not be found so raised an exception')
 
@@ -350,14 +350,15 @@ class OadpWorkloads(WorkloadsOperations):
     def create_pvutil_dataset(self, test_scenario):
         active_role = test_scenario['dataset']['role']
         playbook_path = test_scenario['dataset']['playbook_path']
-        pvc_size = test_scenario['dataset']['pvc_size']
+        pvc_size = test_scenario['dataset']['pv_size']
         dataset_path = test_scenario['dataset']['dataset_path']
         if active_role == 'generator':
             dir_count = test_scenario['dataset']['dir_count']
             files_count = test_scenario['dataset']['files_count']
             file_size = test_scenario['dataset']['files_size']
             dept_count = test_scenario['dataset']['dept_count']
-            playbook_extra_var = (f"dir_count={dir_count}  files_count={files_count}  files_size={file_size}  dept_count={dept_count}  pvc_size={pvc_size}  dataset_path={dataset_path}")
+            case_namespace = test_scenario['args']['namespaces_to_backup']
+            playbook_extra_var = (f"dir_count={dir_count}  files_count={files_count}  files_size={file_size}  dept_count={dept_count}  pvc_size={pvc_size}  dataset_path={dataset_path} namespace={case_namespace}")
             create_data_ansible_output = self.__ssh.run(cmd=f"ansible-playbook {playbook_path}  --extra-vars  '{playbook_extra_var}' -vvv")
             # validation for datagen command execution started
             # sample expected output ok=4    changed=2    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
@@ -373,10 +374,19 @@ class OadpWorkloads(WorkloadsOperations):
         elif active_role == 'dd_generator':
             bs = test_scenario['dataset']['bs']
             count = test_scenario['dataset']['count']
-            playbook_extra_var = (f"bs={bs} count={count}  pvc_size={pvc_size}  dataset_path={dataset_path}")
+            case_namespace = test_scenario['args']['namespaces_to_backup']
+            playbook_extra_var = (f"bs={bs} count={count}  pvc_size={pvc_size}  dataset_path={dataset_path} namespace={case_namespace}")
             create_data_ansible_output = self.__ssh.run(cmd=f"ansible-playbook {playbook_path}  --extra-vars  '{playbook_extra_var}' -vvv")
             ansible_play_invoked_successfully = self.validate_ansible_play(create_data_ansible_output)
             # to do  please add simliar if and flow with call to self.wait_until_process_inside_pod_completes and verify it works
+            if ansible_play_invoked_successfully:
+                active_role = test_scenario['dataset']['role']
+                mount_point = test_scenario['dataset']['dataset_path']
+                namespace = test_scenario['args']['namespaces_to_backup']
+                podname = self.__ssh.run(
+                    cmd=f"oc get pods -o custom-columns=POD:.metadata.name --no-headers -n{namespace}")
+                testcase_timeout = int(test_scenario['args']['testcase_timeout'])
+                self.wait_until_process_inside_pod_completes(podname, namespace, process_text_to_monitor=mount_point,timeout_value=testcase_timeout)
             logger.info(create_data_dd)
         else:
             logger.info("role doesnt define")
@@ -401,7 +411,6 @@ class OadpWorkloads(WorkloadsOperations):
             else:
                 logger.warn(f"ansible-playbook stdout did not contain expected values with regards to number of failures and unreachable related tasks : {playbook_output}")
                 return False
-
 
     @logger_time_stamp
     def get_pod_pv_utilization_info(self, test_scenario):
