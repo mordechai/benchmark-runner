@@ -30,7 +30,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__namespace = self._environment_variables_dict.get('namespace', '')
         self.__oadp_workload = self._environment_variables_dict.get('oadp', '')
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
-        self.__oadp_scenario_name = 'backup-restic-pvc_utlization-2-2-9-rbd-swift-3T'
+        self.__oadp_scenario_name = 'backup-csi-pvc_utlization-2-4-4-cephfs-100f-10gb-50G'
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
@@ -332,8 +332,9 @@ class OadpWorkloads(WorkloadsOperations):
         function will run rsh command and check for presence of running process and sleep until its not present or timeoutval exceeded
         """
         try:
+            self._oc.wait_for_pod_ready(pod_name=pod_name, namespace=namespace)
             current_wait_time = 0
-            while current_wait_time <= timeout_value:
+            while current_wait_time <= int(timeout_value):
                 status_cmd = self.__ssh.run(cmd=f"oc  exec -n{namespace} {pod_name} -- /bin/bash -c 'pgrep -flc {process_text_to_monitor}'")
                 status_cmd = status_cmd.split('\n')[0]
                 if int(status_cmd) == 0:
@@ -352,13 +353,20 @@ class OadpWorkloads(WorkloadsOperations):
         playbook_path = test_scenario['dataset']['playbook_path']
         pvc_size = test_scenario['dataset']['pv_size']
         dataset_path = test_scenario['dataset']['dataset_path']
+        # common vars between roles
+        namespace = test_scenario['args']['namespaces_to_backup']
+        sc = test_scenario['dataset']['sc']
+        # generated_name for pv or namespaces
+        generated_name = test_scenario['testcase']
+        generated_name = generated_name.replace('.', '-')
+        generated_name = 'perf-datagen-' + generated_name.lower() + '-' + sc[-3:]
+        pvc_name = 'pvc-' + generated_name
         if active_role == 'generator':
             dir_count = test_scenario['dataset']['dir_count']
             files_count = test_scenario['dataset']['files_count']
             file_size = test_scenario['dataset']['files_size']
             dept_count = test_scenario['dataset']['dept_count']
-            case_namespace = test_scenario['args']['namespaces_to_backup']
-            playbook_extra_var = (f"dir_count={dir_count}  files_count={files_count}  files_size={file_size}  dept_count={dept_count}  pvc_size={pvc_size}  dataset_path={dataset_path} namespace={case_namespace}")
+            playbook_extra_var = (f"dir_count={dir_count}  files_count={files_count}  files_size={file_size}  dept_count={dept_count}  pvc_size={pvc_size}  dataset_path={dataset_path} namespace={namespace} pvc_name={pvc_name}")
             create_data_ansible_output = self.__ssh.run(cmd=f"ansible-playbook {playbook_path}  --extra-vars  '{playbook_extra_var}' -vvv")
             # validation for datagen command execution started
             # sample expected output ok=4    changed=2    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
@@ -374,11 +382,10 @@ class OadpWorkloads(WorkloadsOperations):
         elif active_role == 'dd_generator':
             bs = test_scenario['dataset']['bs']
             count = test_scenario['dataset']['count']
-            case_namespace = test_scenario['args']['namespaces_to_backup']
-            playbook_extra_var = (f"bs={bs} count={count}  pvc_size={pvc_size}  dataset_path={dataset_path} namespace={case_namespace}")
+            namespace = test_scenario['args']['namespaces_to_backup']
+            playbook_extra_var = (f"bs={bs} count={count}  pvc_size={pvc_size}  dataset_path={dataset_path} namespace={namespace} pvc_name={pvc_name}")
             create_data_ansible_output = self.__ssh.run(cmd=f"ansible-playbook {playbook_path}  --extra-vars  '{playbook_extra_var}' -vvv")
             ansible_play_invoked_successfully = self.validate_ansible_play(create_data_ansible_output)
-            # to do  please add simliar if and flow with call to self.wait_until_process_inside_pod_completes and verify it works
             if ansible_play_invoked_successfully:
                 active_role = test_scenario['dataset']['role']
                 mount_point = test_scenario['dataset']['dataset_path']
@@ -432,6 +439,24 @@ class OadpWorkloads(WorkloadsOperations):
         results_capacity_usage['active_role'] = active_role
         return results_capacity_usage
 
+    @logger_time_stamp
+    def pv_contains_expected_data(self, test_scenario, pv_util_details_returned_by_pod):
+        """
+        method compares data returned from get_pod_pv_utilization_info against data from the yaml
+        """
+        if (pv_util_details_returned_by_pod['disk_capacity'] != test_scenario['dataset']['expected_capacity']):
+            logger.warning(f"disk_capacity failed comparison pod returned: {pv_util_details_returned_by_pod['disk_capacity']} yaml expected: {test_scenario['dataset']['expected_capacity']}")
+            return False
+        if (int(pv_util_details_returned_by_pod['files_count']) != test_scenario['dataset']['files_count']):
+            logger.warning(f"files_count failed comparison pod returned: {pv_util_details_returned_by_pod['files_count']} yaml expected: {test_scenario['dataset']['files_count']}")
+            return False
+        if (int(pv_util_details_returned_by_pod['folders_count']) != test_scenario['dataset']['dir_count']):
+            logger.warning(f"folders_count failed comparison pod returned: {pv_util_details_returned_by_pod['folders_count']} yaml expected: {test_scenario['dataset']['folders_count']}")
+            return False
+        return True
+
+
+
     def get_expected_files_count(self, test_scenario):
         results_capacity_expected = {}
         import math
@@ -458,6 +483,7 @@ class OadpWorkloads(WorkloadsOperations):
              count = test_scenario['dataset']['count']
              current_file_size = bs * count
         return results_capacity_expected
+
     def capacity_usage_and_expected_comparison(self, results_capacity_expected, results_capacity_usage):
         if len(results_capacity_expected) != len(results_capacity_usage):
             print("Not Equal")
@@ -553,6 +579,7 @@ class OadpWorkloads(WorkloadsOperations):
             current_wait_time += 3
         except Exception as err:
             logger.info(f'{cr_name} OADPWaitForConditionTimeout raised an exception')
+
 
     @logger_time_stamp
     def is_oadp_cr_present(self, ns, cr_type, cr_name):
@@ -1091,10 +1118,19 @@ class OadpWorkloads(WorkloadsOperations):
         """
         # Load Scenario Details
         test_scenario = self.load_test_scenario()
+
+        # remove this
+        expected_sc = test_scenario['dataset']['sc']
+        self.set_default_storage_class(expected_sc)
+        self.set_volume_snapshot_class(expected_sc)
         self.create_pvutil_dataset(test_scenario)
-        results_capacity_expected = self.get_pod_pv_utilization_info(test_scenario)
-        results_capacity_usage = self.get_expected_files_count(test_scenario)
+        # results_capacity_expected = self.get_pod_pv_utilization_info(test_scenario)
+        # results_capacity_usage = self.get_expected_files_count
+        pv_util_details_returned_by_pod = self.get_pod_pv_utilization_info(test_scenario)
+        check_result = self.pv_contains_expected_data(test_scenario, pv_util_details_returned_by_pod)
         self.capacity_usage_and_expected_comparison(results_capacity_expected, results_capacity_usage)
+        # remove this
+
 
         # Get OADP, Velero, Storage Details
         self.oadp_get_version_info()
@@ -1104,7 +1140,6 @@ class OadpWorkloads(WorkloadsOperations):
         # Save test scenario run time settings run_metadata dict
         self.__run_metadata['summary']['runtime'].update(test_scenario)
         self.__result_dicts.append(test_scenario)
-        self.generate_elastic_index(test_scenario)
 
         num_of_assets_desired: int = test_scenario['dataset']['pods_per_ns']
         namespace = test_scenario['args']['namespaces_to_backup']
