@@ -1,3 +1,4 @@
+import logging
 import os
 import json
 import time
@@ -24,13 +25,13 @@ class OadpWorkloads(WorkloadsOperations):
         super().__init__()
         self.__oadp_path = '/tmp/mpqe-scale-scripts/mtc-helpers/busybox'
         self.__oadp_base_dir = '/tmp/mpqe-scale-scripts/oadp-helpers'
-        self.__oadp_scenario_data = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/internal_data/pvc_utlization.yaml'
+        self.__oadp_scenario_data = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/internal_data/single_ns.yaml'
         self.__oadp_promql_queries = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/metrics/metrics-oadp.yaml'
         # environment variables
         self.__namespace = self._environment_variables_dict.get('namespace', '')
         self.__oadp_workload = self._environment_variables_dict.get('oadp', '')
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
-        self.__oadp_scenario_name = 'backup-csi-pvc_utlization-2-4-4-cephfs-100f-10gb-50G'
+        self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-100-pods-rbd'
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
@@ -243,10 +244,10 @@ class OadpWorkloads(WorkloadsOperations):
             current_sc = cmd_get_pvc_sc_and_size.split(' ')[0]
             current_size = cmd_get_pvc_sc_and_size.split(' ')[1]
             if current_sc != expected_sc:
-                logger.info(f"current pv storage class used: {current_sc} doesnt match expected storage class of: {expected_sc}")
+                logger.warning(f"current pv storage class used: {current_sc} doesnt match expected storage class of: {expected_sc}")
                 return False
             if current_size != expected_size:
-                logger.info(f"current pv size: {current_size} doesnt match expected pv size: {expected_size}")
+                logger.warning(f"current pv size: {current_size} doesnt match expected pv size: {expected_size}")
                 return False
             logger.info(f"pod: {podName} in ns: {expected_ns} matches desired storage and pv size")
             return True
@@ -263,10 +264,26 @@ class OadpWorkloads(WorkloadsOperations):
         if running_pods != '':
             list_of_running_pods = running_pods.split('\n')
             if len(list_of_running_pods) == num_of_pods_expected:
-                print("expected dataset is present")
+                logger.info(f"verify_running_pods: found expected number of running pods in this {target_namespace}")
                 return True
             else:
-                return False
+                not_yet_in_run_status = self.__ssh.run(cmd=f'oc get pods -n {target_namespace} --field-selector status.phase!=Running --no-headers -o custom-columns=":metadata.name"')
+                logger.info(f'verify_running_pods: stdout of not_yet_in_run_status: {not_yet_in_run_status}')
+                pods_not_yet_in_run_status = not_yet_in_run_status.split('\n')
+                for pod in pods_not_yet_in_run_status:
+                    logger.info(
+                        f"verify_running_pods: waiting for {pod} in ns {target_namespace} to go to Running status")
+                    self._oc.wait_for_pod_ready(pod, target_namespace)
+                running_pods = self.__ssh.run(
+                    cmd=f'oc get pods -n {target_namespace} --field-selector status.phase=Running --no-headers -o custom-columns=":metadata.name"')
+                if running_pods != '':
+                    list_of_running_pods = running_pods.split('\n')
+                    if len(list_of_running_pods) == num_of_pods_expected:
+                        logger.info(
+                            f"verify_running_pods: found expected number of running pods in this {target_namespace} after waiting additional time")
+                        return True
+                    else:
+                        return False
         else:
             print('expected dataset NOT present returning false')
             return False
@@ -294,7 +311,7 @@ class OadpWorkloads(WorkloadsOperations):
             return True
         check_num_of_pods_and_state = self.verify_running_pods(num_of_pods_expected,target_namespace)
         if check_num_of_pods_and_state == False:
-            logger.info(f"Dataset not as expected - did not find {num_of_pods_expected} of pods in namespace {target_namespace}")
+            logger.warn(f"verify_pod_presence_and_storage: Dataset not as expected - did not find {num_of_pods_expected} of pods in namespace {target_namespace}")
             return False
         list_of_pods = self.get_list_of_pods(namespace=target_namespace)
         for p in list_of_pods:
@@ -303,28 +320,50 @@ class OadpWorkloads(WorkloadsOperations):
                 return False
         return True
 
-
     @logger_time_stamp
-    def create_oadp_source_dataset(self, num_of_assets_desired, target_namespace, pv_size, storage):
+    def busybox_dataset_creation(self, scenario):
         """
-        This method creates dataset for oadp to work against
-        :return:
+        method scales up single NS with busybox pods and oc assets
         """
-        # check whether current NS already exists
-        check_ns_presence = self.__ssh.run(cmd=f'oc get ns {target_namespace}')
-        if check_ns_presence.find('not found') < 0:
-            # delete ns with same name
-            logger.warn(f"NS {target_namespace} with same name already exists and will be remoed")
-            check_ns_presence = self.__ssh.run(cmd=f'oc delete ns {target_namespace}')
-            if check_ns_presence.find('deleted') < 0:
-                logger.exception("Unable to remove NS {ns} when attempting to clean up before populating NS likely same ns exists on different storage")
+        num_of_assets_desired = scenario['dataset']['pods_per_ns']
+        target_namespace = scenario['args']['namespaces_to_backup']
+        pv_size =  scenario['dataset']['pv_size']
+        storage = scenario['dataset']['sc']
+        role = scenario['dataset']['role']
         self.oadp_timer(action="start", transaction_name='dataset_creation')
-        print(f'BusyBoxPodSingleNS.sh {num_of_assets_desired} {pv_size} {storage}')
-        self.__ssh.run(cmd=f'{self.__oadp_path}/BusyBoxPodSingleNS.sh {num_of_assets_desired} {pv_size} {storage} > /tmp/dataset-creation.log')
+        logger.info(f'{role} {num_of_assets_desired} {pv_size} {storage}')
+        self.__ssh.run(
+            cmd=f'{self.__oadp_path}/{role} {num_of_assets_desired} {pv_size} {storage} > /tmp/dataset-creation.log')
         for i in range(1, num_of_assets_desired + 1):
             print(f'checking for {target_namespace}-{i} in namespace= {target_namespace}')
             self._oc.wait_for_pod_ready(pod_name=f'{target_namespace}-{i}', namespace=target_namespace)
         self.oadp_timer(action="stop", transaction_name='dataset_creation')
+
+
+    @logger_time_stamp
+    def create_oadp_source_dataset(self, scenario):
+        """
+        This method creates dataset for oadp to work against
+        :return:
+        """
+        num_of_assets_desired = scenario['dataset']['pods_per_ns']
+        target_namespace = scenario['args']['namespaces_to_backup']
+        pv_size = scenario['dataset']['pv_size']
+        storage = scenario['dataset']['sc']
+        role = scenario['dataset']['role']
+        #
+        # # check whether current NS already exists
+        # check_ns_presence = self.__ssh.run(cmd=f'oc get ns {target_namespace}')
+        # if check_ns_presence.find('not found') < 0:
+        #     # delete ns with same name
+        #     logger.warn(f"NS {target_namespace} with same name already exists and will be remoed")
+        #     check_ns_presence = self.__ssh.run(cmd=f'oc delete ns {target_namespace}')
+        #     if check_ns_presence.find('deleted') < 0:
+        #         logger.exception("Unable to remove NS {ns} when attempting to clean up before populating NS likely same ns exists on different storage")
+        if role == 'BusyBoxPodSingleNS.sh':
+            self.busybox_dataset_creation(scenario)
+        if role == 'generator':
+            self.create_pvutil_dataset(scenario)
 
     @logger_time_stamp
     def wait_until_process_inside_pod_completes(self, pod_name, namespace, process_text_to_monitor, timeout_value):
@@ -437,6 +476,7 @@ class OadpWorkloads(WorkloadsOperations):
         current_folders_count = folders_count.split('\n')[-1].split('\t')[0]
         results_capacity_usage['folders_count'] = current_folders_count
         results_capacity_usage['active_role'] = active_role
+        logger.info(f"get_pod_pv_utilization_info saw pv contained: {results_capacity_usage}")
         return results_capacity_usage
 
     @logger_time_stamp
@@ -453,6 +493,7 @@ class OadpWorkloads(WorkloadsOperations):
         if (int(pv_util_details_returned_by_pod['folders_count']) != test_scenario['dataset']['dir_count']):
             logger.warning(f"folders_count failed comparison pod returned: {pv_util_details_returned_by_pod['folders_count']} yaml expected: {test_scenario['dataset']['folders_count']}")
             return False
+        logger.info('pv_contains_expected_data is returning True based on pv_util_details_returned_by_pod')
         return True
 
 
@@ -535,10 +576,10 @@ class OadpWorkloads(WorkloadsOperations):
         this method is for restoring oadp backups
       os  """
         #              cmd: "oc -n openshift-adp exec deployment/velero -c velero -it -- ./velero restore create {{restore_name}}  --from-backup {{backup_name}}"
-        restore_cmd = self.__ssh.run(
-            cmd=f'oc -n openshift-adp exec deployment/velero -c velero -it -- ./velero restore create {restore_name} --from-backup {backup_name}')
-        if restore_cmd.find('submitted successfully') < 0:
+        restore_cmd = self.__ssh.run(cmd=f'oc -n openshift-adp exec deployment/velero -c velero -it -- ./velero restore create {restore_name} --from-backup {backup_name}')
+        if restore_cmd.find('submitted successfully') == 0:
             print("Error restore was not successfully started")
+            logging.error(f'Error restore did not execut stdout {restore_cmd}')
 
     @logger_time_stamp
     def oadp_create_backup(self, plugin, backup_name, namespaces_to_backup):
@@ -548,12 +589,15 @@ class OadpWorkloads(WorkloadsOperations):
         if plugin == 'restic':
             backup_cmd = self.__ssh.run(
                 cmd=f'oc -n openshift-adp exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --default-volumes-to-fs-backup=true --snapshot-volumes=false')
+            if backup_cmd.find('submitted successfully') == 0:
+                print("Error backup attempt failed !!! ")
+                logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
         if plugin == 'csi':
             backup_cmd = self.__ssh.run(
                 cmd=f'oc -n openshift-adp exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup}')
-        if backup_cmd.find('submitted successfully') == 0:
-            print("Error backup was not successfully started")
-            logger.error("Error backup was not successfully started")
+            if backup_cmd.find('submitted successfully') == 0:
+                print("Error backup attempt failed !!! ")
+                logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
 
     @logger_time_stamp
     def wait_for_condition_of_oadp_cr(self, cr_type, cr_name, testcase_timeout=3600):
@@ -841,11 +885,12 @@ class OadpWorkloads(WorkloadsOperations):
             self.__result_dicts.append(self.__run_metadata['summary']['runtime']['results'])
 
     @logger_time_stamp
-    def set_run_status(self):
+    def set_run_status(self, msg={}):
         """
         method for setting status of run
         """
-        sample =  self.__run_metadata['summary']['runtime']['results'].get('cr_status', 'error')
+        if msg:
+            self.__run_metadata['summary']['results'].update(msg)
         self.__run_metadata['status'] = self.__run_metadata['summary']['runtime']['results'].get('cr_status', 'error')
 
     @logger_time_stamp
@@ -879,7 +924,6 @@ class OadpWorkloads(WorkloadsOperations):
         if old_value == 0:
             # avoid division by zero
             return 0
-        print(f'old: {old_value}  new: {new_value}')
         diff = (new_value - old_value) / old_value * 100
         return diff
 
@@ -894,13 +938,11 @@ class OadpWorkloads(WorkloadsOperations):
         for part in pod_parts:
             if any(map(str.isdigit, part)):
                 fullname = base_name[:-1]
-                print (f'correct name is {fullname}')
                 return fullname
             else:
                 # Handle non-digit based pod names eg: node-agent-vzbgg note how vzbgg doesnt contain digit
                 if pod_parts[-1] != part:
                     base_name += part + "-"
-                    print (f"base_name patial is {base_name}")
                 else:
                     fullname = base_name[:-1]
                     return fullname
@@ -908,7 +950,6 @@ class OadpWorkloads(WorkloadsOperations):
         # so we parse on - and assume last part of name is unique char string that we dont care about
         # csi-cephfsplugin-provisioner-asdf ==> return csi-cephfsplugin-provisioner
         fullname = base_name[:-2]
-        print(f'correct name is {fullname}')
         return fullname
 
 
@@ -919,7 +960,7 @@ class OadpWorkloads(WorkloadsOperations):
         """
         cmd_adm_top_ns_output = self.__ssh.run(cmd=f"oc adm top pods -n {namespace} --no-headers=true")
         if len(cmd_adm_top_ns_output.splitlines()) == 0:
-            print(f'resulting query for get_resources_per_ns {namespace} resources failed 0 lines returned')
+            logger.warn(f'resulting query for get_resources_per_ns {namespace} resources failed 0 lines returned')
         else:
             cmd_adm_top_ns_output_list = list(filter(None, cmd_adm_top_ns_output.split('\n')))
             if cmd_adm_top_ns_output_list is not None:
@@ -945,7 +986,6 @@ class OadpWorkloads(WorkloadsOperations):
                             self.__run_metadata['summary']['resources']['run_time_pods'][pod_index][0] = {**original_dict, **pod_details}
                             # Set run time data to dict indexed by pod_role_name to allow for easy querying post run
                             self.__run_metadata['summary']['resources']['pods'][pod_name_by_role] = self.__run_metadata['summary']['resources']['run_time_pods'][pod_index][0]
-                            # Todo remove run time hash of pod resource info
                             del self.__run_metadata['summary']['resources']['run_time_pods'][pod_index]
                     else:
                         # Initalize key:value runtime pod name to base pod name for updating upon result collection
@@ -979,7 +1019,6 @@ class OadpWorkloads(WorkloadsOperations):
             cmd=f'oc get pods -n {namespace} --field-selector status.phase=Running --no-headers -o custom-columns=":metadata.name"')
         if running_pods != '':
             list_of_running_pods = running_pods.split('\n')
-            print('running_pods detected in {namespace} are: {running_pods} expected {num_of_pods_expected}')
             return list_of_running_pods
         else:
             return False
@@ -1069,6 +1108,13 @@ class OadpWorkloads(WorkloadsOperations):
                 self.oadp_restore(plugin=test_scenario['args']['plugin'], restore_name=test_scenario['args']['OADP_CR_NAME'], backup_name=test_scenario['args']['backup_name'])
                 self.wait_for_condition_of_oadp_cr(cr_type=test_scenario['args']['OADP_CR_TYPE'], cr_name=test_scenario['args']['OADP_CR_NAME'], testcase_timeout=test_scenario['args']['testcase_timeout'])
                 self.oadp_timer(action="stop", transaction_name=f"{test_scenario['args']['OADP_CR_NAME']}")
+                dataset_restored_as_expected = self.validate_dataset(test_scenario)
+                self.__run_metadata['summary']['results']['dataset_post_run_validation'] = dataset_restored_as_expected
+                if not dataset_restored_as_expected:
+                    logger.error(f"Restored Dataset for {test_scenario['args']['OADP_CR_NAME']} did not pass post run validations on {test_scenario['args']['namespaces_to_backup']}")
+                else:
+                    logger.info('Restore passed post run validations')
+
 
     @logger_time_stamp
     def load_test_scenario(self):
@@ -1082,6 +1128,36 @@ class OadpWorkloads(WorkloadsOperations):
         # Load data from oadp-helpers/templates/internal_data/tests.yaml
         test_data = yaml.safe_load(Path(self.__oadp_scenario_data).read_text())
         return (test_data['scenarios'][index])
+
+    @logger_time_stamp
+    def validate_dataset(self, scenario):
+        """
+        method verifies dataset pod, pv size, sc, and pv contents (utilization of mount, file & folder counts where relevant.)
+        returns boolean representing state of dataset present vs whats expected.
+        """
+        num_of_pods_expected = scenario['dataset']['pods_per_ns']
+        target_namespace = scenario['args']['namespaces_to_backup']
+        expected_size = scenario['dataset']['pv_size']
+        expected_sc = scenario['dataset']['sc']
+        role = scenario['dataset']['role']
+        skip_dataset_validation = scenario['args'].get('skip_source_dataset_check', False)
+
+        # all datasets are checked for if the pods are in the correct state with relevant pv in correct sc and pv size
+        # datasets with role  generator require addition check of pv utilization in regards to utilized size, folders, and files
+        pod_presence_and_storage_as_expected = self.verify_pod_presence_and_storage(num_of_pods_expected, target_namespace, expected_sc, expected_size, skip_dataset_validation)
+        if not pod_presence_and_storage_as_expected:
+            logger.warn(f'validate_dataset returning false for pod_presence_and_storage_as_expected: value is: {pod_presence_and_storage_as_expected}')
+            return False
+        elif role == 'generator':
+            pv_util_details_returned_by_pod = self.get_pod_pv_utilization_info(scenario)
+            pv_contents_as_expected = self.pv_contains_expected_data(scenario, pv_util_details_returned_by_pod)
+            if not pv_contents_as_expected:
+                logger.warn(
+                    f'validate_dataset returning false for pv_contents_as_expected: value is: {pv_contents_as_expected}')
+                return False
+        logger.info(
+            f'validate_dataset has passed all validations returning true')
+        return True
 
     @logger_time_stamp
     def initialize_pod_resources_by_base_name(self, pod_name):
@@ -1119,19 +1195,6 @@ class OadpWorkloads(WorkloadsOperations):
         # Load Scenario Details
         test_scenario = self.load_test_scenario()
 
-        # remove this
-        expected_sc = test_scenario['dataset']['sc']
-        self.set_default_storage_class(expected_sc)
-        self.set_volume_snapshot_class(expected_sc)
-        self.create_pvutil_dataset(test_scenario)
-        # results_capacity_expected = self.get_pod_pv_utilization_info(test_scenario)
-        # results_capacity_usage = self.get_expected_files_count
-        pv_util_details_returned_by_pod = self.get_pod_pv_utilization_info(test_scenario)
-        check_result = self.pv_contains_expected_data(test_scenario, pv_util_details_returned_by_pod)
-        self.capacity_usage_and_expected_comparison(results_capacity_expected, results_capacity_usage)
-        # remove this
-
-
         # Get OADP, Velero, Storage Details
         self.oadp_get_version_info()
         self.get_velero_details()
@@ -1140,38 +1203,24 @@ class OadpWorkloads(WorkloadsOperations):
         # Save test scenario run time settings run_metadata dict
         self.__run_metadata['summary']['runtime'].update(test_scenario)
         self.__result_dicts.append(test_scenario)
+        self.generate_elastic_index(test_scenario)
 
-        num_of_assets_desired: int = test_scenario['dataset']['pods_per_ns']
         namespace = test_scenario['args']['namespaces_to_backup']
-        # namespace = f'busybox-perf-single-ns-{num_of_assets_desired}-pods'
-        # Check if this is a single or multi name space scenario
-        # if test_scenario['dataset']['total_namespaces'] == 1:
-        #     num_of_assets_desired: int = test_scenario['dataset']['pods_per_ns']
-        #     namespace = test_scenario['args']['namespaces_to_backup']
-        #     # namespace = f'busybox-perf-single-ns-{num_of_assets_desired}-pods'
-        # else:
-        #     # todo: handle var loading for multi namespace
-        #     print(' logic for mult var loading here - should only be seen if total_namespaces > 1')
-
-        # Check if namespace containing dataset to be 'backed up' is present
-        # if dataset is not present, create it as we intend to perform backup
-        num_of_pods_expected = num_of_assets_desired
         target_namespace = test_scenario['args']['namespaces_to_backup']
+
+        # Verify desired storage is default storage class and volumesnapshotclass
         expected_sc = test_scenario['dataset']['sc']
         expected_size = test_scenario['dataset']['pv_size']
 
-        # Verify desired storage is default storage class and volumesnapshotclass
         self.set_default_storage_class(expected_sc)
         self.set_volume_snapshot_class(expected_sc)
 
         # when performing backup
         # Check if source namespace aka our dataset is preseent, if dataset not prsent then create it
         if test_scenario['args']['OADP_CR_TYPE'] == 'backup':
-            skip_dataset_validation = test_scenario['args'].get('skip_source_dataset_check', False)
-            dataset_already_present = self.verify_pod_presence_and_storage(num_of_pods_expected, target_namespace,
-                                                                           expected_sc, expected_size, skip_dataset_validation)
+            dataset_already_present = self.validate_dataset(test_scenario)
             if not dataset_already_present:
-                self.create_oadp_source_dataset(num_of_assets_desired, target_namespace=namespace, pv_size=test_scenario['dataset']['pv_size'], storage=test_scenario['dataset']['sc'] )
+                self.create_oadp_source_dataset(test_scenario)
 
         # when performing restore
         # source dataset will be removed before restore attempt unless dataset yaml contains ['args']['existingResourcePolicy'] set to 'Update'
@@ -1243,15 +1292,11 @@ class OadpWorkloads(WorkloadsOperations):
         '''
         method creates elastic index name based on test_scenario data
         '''
-        if scenario['testcase'] < 2.0:
-            if scenario['dataset']['total_namespaces'] == 1:
-                index_name = 'oadp-' + scenario['testtype'] + '-' + 'single-namespace'
-            elif scenario['dataset']['total_namespaces'] > 1:
+        if scenario['dataset']['total_namespaces'] == 1:
+            index_name = 'oadp-' + scenario['testtype'] + '-' + 'single-namespace'
+        elif scenario['dataset']['total_namespaces'] > 1:
                 index_name = 'oadp-' + scenario['testtype'] + '-' + 'multi-namespace'
-        if (scenario['testcase'] >= 2.0 and scenario['testcase'] < 3.0):
-            if scenario['dataset']['pods_per_ns'] == 1:
-                index_name = 'oadp-' + scenario['testtype'] + '-' + 'single-pv-util'
-        print(f'index_name {index_name}')
+        logger.info(f'index_name {index_name}')
         self.__run_metadata['index'] = index_name
         return index_name
 
