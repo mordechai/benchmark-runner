@@ -956,7 +956,8 @@ class OadpWorkloads(WorkloadsOperations):
     @logger_time_stamp
     def get_resources_per_ns(self, namespace, label=''):
         """
-        method returns oc adm top pods value
+        method returns oc adm top pods values for ns, when label is set to 'end' diffs of values are stored
+        additional % of cpu/mem limit, pod uptime stored when limit is set to 'end'
         """
         cmd_adm_top_ns_output = self.__ssh.run(cmd=f"oc adm top pods -n {namespace} --no-headers=true")
         if len(cmd_adm_top_ns_output.splitlines()) == 0:
@@ -997,6 +998,11 @@ class OadpWorkloads(WorkloadsOperations):
                         pod_resources = data['spec']['containers'][0]['resources']
                         pod_details = [{'name': adm_stdout_response[0], 'cores': adm_stdout_response[1], 'mem': adm_stdout_response[2], 'resources': pod_resources, 'label': label}]
                         self.__run_metadata['summary']['resources']['run_time_pods'].append(pod_details)
+            if label == 'end':
+                # updates existing dict of utlized limits for cpu/mem and uptime
+                self.get_percentage_of_limit_utilized(ns=namespace)
+
+
 
     @logger_time_stamp
     def find_metadata_index_for_pods(self, target):
@@ -1022,6 +1028,33 @@ class OadpWorkloads(WorkloadsOperations):
             return list_of_running_pods
         else:
             return False
+
+    @logger_time_stamp
+    def get_percentage_of_limit_utilized(self, ns):
+        """
+        method collects cpu/mem limits and pod uptime
+        values are appened to existing dict  self.__run_metadata['summary']['resources']['pods'][pod_name_by_role]
+        """
+        #   oc describe node | grep -w "openshift-adp" >> /home/mlehrer/Desktop/adm.out
+        get_node_names = self.__ssh.run(cmd=f'oc describe node | grep -w "{ns}"')
+        # multiline = get_node_names.splitlines()
+        # x1 = multiline[0].split(' ')
+        # new_list = list(filter(None, x1))
+        adm_result = {}
+        for line in get_node_names.splitlines():
+            x = line.split(' ')
+            x = list(filter(None, x))
+            pod_name_by_role = self.__oadp_runtime_resource_mapping[f'{x[1]}']
+            original_dict = self.__run_metadata['summary']['resources']['pods'][pod_name_by_role]
+            # x[5] cpulimit_percentage x[9] memlimit_percentage x[10] pod_uptime
+            # extract raw digit value from eg: (3%) => 3
+            cpu_limit_value = re.findall(r'\d+', x[5])
+            mem_limit_value = re.findall(r'\d+', x[9])
+            updated_pod_details = {'ns': x[0], 'cpu_limit_percentage': cpu_limit_value, 'mem_limit_percentage': mem_limit_value, 'pod_uptime': x[10] }
+            original_dict =  self.__run_metadata['summary']['resources']['pods'][pod_name_by_role]
+            self.__run_metadata['summary']['resources']['pods'][pod_name_by_role] = {**original_dict, **updated_pod_details}
+
+
 
     @logger_time_stamp
     def get_node_resource_avail_adm(self, ocp_node):
@@ -1195,7 +1228,7 @@ class OadpWorkloads(WorkloadsOperations):
         # Load Scenario Details
         test_scenario = self.load_test_scenario()
 
-        # Get OADP, Velero, Storage Details
+       # Get OADP, Velero, Storage Details
         self.oadp_get_version_info()
         self.get_velero_details()
         self.get_storage_details()
