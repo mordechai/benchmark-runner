@@ -252,6 +252,33 @@ class OadpWorkloads(WorkloadsOperations):
             logger.info(f"pod: {podName} in ns: {expected_ns} matches desired storage and pv size")
             return True
 
+    @logger_time_stamp
+    def verify_pod_restarts(self, target_namespace):
+        """
+        This method verifies number of pods restarts in namespace are not greater than 0
+        sets ['summary']['results']['pod_restarts_post_run_validation']['status'] to true/false and lists pods with restart values
+        :return:
+        """
+        restart_query = "'.items[] | select(.status.containerStatuses[].restartCount > 0) | .metadata.name'"
+        pods_restarted_cmd = self.__ssh.run(
+            cmd=f'oc get pods -n {target_namespace} -o json | jq -r {restart_query}')
+        if pods_restarted_cmd != '':
+            self.__run_metadata['summary']['results']['pod_restarts_post_run_validation'] = {}
+            self.__run_metadata['summary']['results']['pod_restarts_post_run_validation']['status'] = False
+            get_pod_details = self.__ssh.run(cmd=f'oc get pods -n {target_namespace} -o json')
+            data = json.loads(get_pod_details)
+            pods_that_restarted = {}
+            for pod in data['items']:
+                if pod['status']['containerStatuses'][0]['restartCount'] > 0:
+                    name = pod['metadata']['name']
+                    pods_that_restarted[f'{name}'] = pod['status']['containerStatuses'][0]['restartCount']
+            self.__run_metadata['summary']['results']['pod_restarts_post_run_validation']['restarted_pods'] = {}
+            self.__run_metadata['summary']['results']['pod_restarts_post_run_validation']['restarted_pods'].update(pods_that_restarted)
+        else:
+            self.__run_metadata['summary']['results']['pod_restarts_post_run_validation'] = {}
+            self.__run_metadata['summary']['results']['pod_restarts_post_run_validation']['status'] = True
+            # Saving empty dict for query consistency in ELK querying
+            self.__run_metadata['summary']['results']['pod_restarts_post_run_validation']['restarted_pods'] = {}
 
     @logger_time_stamp
     def verify_running_pods(self, num_of_pods_expected, target_namespace):
@@ -1228,6 +1255,7 @@ class OadpWorkloads(WorkloadsOperations):
         # Load Scenario Details
         test_scenario = self.load_test_scenario()
 
+
        # Get OADP, Velero, Storage Details
         self.oadp_get_version_info()
         self.get_velero_details()
@@ -1296,6 +1324,9 @@ class OadpWorkloads(WorkloadsOperations):
 
         # Get OCP node info
         self.collect_all_node_resource()
+
+        # Post Run Validations
+        self.verify_pod_restarts('openshift-adp')
 
         # Set Run Status
         self.set_run_status()
