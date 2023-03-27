@@ -31,7 +31,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__namespace = self._environment_variables_dict.get('namespace', '')
         self.__oadp_workload = self._environment_variables_dict.get('oadp', '')
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
-        self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-100-pods-rbd'
+        self.__oadp_scenario_name = 'restore-csi-busybox-perf-single-100-pods-rbd'
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
@@ -1060,9 +1060,9 @@ class OadpWorkloads(WorkloadsOperations):
                         pod_resources = data['spec']['containers'][0]['resources']
                         pod_details = [{'name': adm_stdout_response[0], 'cores': adm_stdout_response[1], 'mem': adm_stdout_response[2], 'resources': pod_resources, 'label': label}]
                         self.__run_metadata['summary']['resources']['run_time_pods'].append(pod_details)
-            if label == 'end':
-                # updates existing dict of utlized limits for cpu/mem and uptime
-                self.get_percentage_of_limit_utilized(ns=namespace)
+                if label == 'end':
+                    # updates existing dict of utlized limits for cpu/mem and uptime
+                    self.get_percentage_of_limit_utilized(ns=namespace)
 
 
 
@@ -1097,24 +1097,24 @@ class OadpWorkloads(WorkloadsOperations):
         method collects cpu/mem limits and pod uptime
         values are appened to existing dict  self.__run_metadata['summary']['resources']['pods'][pod_name_by_role]
         """
-        #   oc describe node | grep -w "openshift-adp" >> /home/mlehrer/Desktop/adm.out
         get_node_names = self.__ssh.run(cmd=f'oc describe node | grep -w "{ns}"')
-        # multiline = get_node_names.splitlines()
-        # x1 = multiline[0].split(' ')
-        # new_list = list(filter(None, x1))
         adm_result = {}
         for line in get_node_names.splitlines():
-            x = line.split(' ')
-            x = list(filter(None, x))
-            pod_name_by_role = self.__oadp_runtime_resource_mapping[f'{x[1]}']
-            original_dict = self.__run_metadata['summary']['resources']['pods'][pod_name_by_role]
-            # x[5] cpulimit_percentage x[9] memlimit_percentage x[10] pod_uptime
-            # extract raw digit value from eg: (3%) => 3
-            cpu_limit_value = re.findall(r'\d+', x[5])
-            mem_limit_value = re.findall(r'\d+', x[9])
-            updated_pod_details = {'ns': x[0], 'cpu_limit_percentage': cpu_limit_value, 'mem_limit_percentage': mem_limit_value, 'pod_uptime': x[10] }
-            original_dict =  self.__run_metadata['summary']['resources']['pods'][pod_name_by_role]
-            self.__run_metadata['summary']['resources']['pods'][pod_name_by_role] = {**original_dict, **updated_pod_details}
+            # necessary to check if line contains the substring needed to parse
+            matches_expected_line_ouput = re.findall(f'{ns}    ', line)
+            if len(matches_expected_line_ouput) > 0:
+                x = line.split(' ')
+                x = list(filter(None, x))
+                logger.info(f'get_percentage_of_limit_utilized  working with x: {x} whose length is {len(x)}')
+                pod_name_by_role = self.__oadp_runtime_resource_mapping[f'{x[1]}']
+                original_dict = self.__run_metadata['summary']['resources']['pods'][pod_name_by_role]
+                # x[5] cpulimit_percentage x[9] memlimit_percentage x[10] pod_uptime
+                # extract raw digit value from eg: (3%) => 3
+                cpu_limit_value = re.findall(r'\d+', x[5])
+                mem_limit_value = re.findall(r'\d+', x[9])
+                updated_pod_details = {'ns': x[0], 'cpu_limit_percentage': cpu_limit_value, 'mem_limit_percentage': mem_limit_value, 'pod_uptime': x[10] }
+                original_dict =  self.__run_metadata['summary']['resources']['pods'][pod_name_by_role]
+                self.__run_metadata['summary']['resources']['pods'][pod_name_by_role] = {**original_dict, **updated_pod_details}
 
 
 
@@ -1290,7 +1290,7 @@ class OadpWorkloads(WorkloadsOperations):
         # Load Scenario Details
         test_scenario = self.load_test_scenario()
 
-       # Get OADP, Velero, Storage Details
+        # Get OADP, Velero, Storage Details
         self.oadp_get_version_info()
         self.get_velero_details()
         self.get_storage_details()
