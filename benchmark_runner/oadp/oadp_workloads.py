@@ -281,6 +281,41 @@ class OadpWorkloads(WorkloadsOperations):
             self.__run_metadata['summary']['results']['pod_restarts_post_run_validation']['restarted_pods'] = {}
 
     @logger_time_stamp
+    def verify_cluster_operators_status(self):
+        """
+        This method verifies status of cluster operators
+        it checks avaiblity and status of degraded
+
+        sets ['summary']['results']['co_status_post_run_validation']['status'] to true/false
+        lists co that arent available/degraded only when relevant.
+        :return:
+        """
+        get_co_status = self.__ssh.run(cmd=f'oc get co -o json')
+        if get_co_status != '':
+            self.__run_metadata['summary']['results']['cluster_operator_post_run_validation'] = {}
+            data = json.loads(get_co_status)
+            co_degraded = {}
+            co_that_are_not_available = {}
+            for co in data['items']:
+                for s in co['status']['conditions']:
+                    if (s['type'] == 'Available' and s['status'] == 'False'):
+                        co_name = co['metadata']['name']
+                        co_that_are_not_available[f'{co_name}'] = s['status']
+                    if (s['type'] == 'Degraded' and s['status'] == 'True'):
+                        co_name = co['metadata']['name']
+                        co_degraded[f'{co_name}'] = s['status']
+            self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['unavailable'] = {}
+            if bool(co_that_are_not_available):
+                self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['unavailable'].update(co_that_are_not_available)
+            self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['degraded'] = {}
+            if bool(co_degraded):
+                self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['degraded'].update(co_degraded)
+            if (bool(co_that_are_not_available) == False) and (bool(co_degraded) == False):
+                self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['status'] = True
+            else:
+                self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['status'] = False
+
+    @logger_time_stamp
     def verify_running_pods(self, num_of_pods_expected, target_namespace):
         """
         This method verifies number of pods in namespace are in running state
@@ -1255,7 +1290,6 @@ class OadpWorkloads(WorkloadsOperations):
         # Load Scenario Details
         test_scenario = self.load_test_scenario()
 
-
        # Get OADP, Velero, Storage Details
         self.oadp_get_version_info()
         self.get_velero_details()
@@ -1326,7 +1360,9 @@ class OadpWorkloads(WorkloadsOperations):
         self.collect_all_node_resource()
 
         # Post Run Validations
+        #    check for pod restarts / cluster operator status
         self.verify_pod_restarts('openshift-adp')
+        self.verify_cluster_operators_status()
 
         # Set Run Status
         self.set_run_status()
