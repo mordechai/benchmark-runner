@@ -31,7 +31,8 @@ class OadpWorkloads(WorkloadsOperations):
         self.__namespace = self._environment_variables_dict.get('namespace', '')
         self.__oadp_workload = self._environment_variables_dict.get('oadp', '')
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
-        self.__oadp_scenario_name = 'restore-csi-busybox-perf-single-100-pods-rbd'
+        self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', '')
+        # self.__oadp_scenario_name = 'restore-csi-busybox-perf-single-100-pods-rbd'
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
@@ -1116,6 +1117,21 @@ class OadpWorkloads(WorkloadsOperations):
                 original_dict =  self.__run_metadata['summary']['resources']['pods'][pod_name_by_role]
                 self.__run_metadata['summary']['resources']['pods'][pod_name_by_role] = {**original_dict, **updated_pod_details}
 
+    @logger_time_stamp
+    def get_node_generic_name(self, host):
+        """
+        method returns base name of host
+        eg: worker000-r640 ==> worker000 or master-0 => master-0
+        """
+        if 'worker' in host and host.count('-') == 1:
+            #'worker000-r640' or 'worker-000-r650
+            updated_host = host.split('-')[0]
+            logger.info(f"get_node_generic_name converting {host} to {updated_host}")
+            return updated_host
+        else:
+            # master-0
+            logger.info(f"get_node_generic_name no need to convert host: {host} as its not a worker")
+            return host
 
 
     @logger_time_stamp
@@ -1126,7 +1142,8 @@ class OadpWorkloads(WorkloadsOperations):
         cmd_output = self.__ssh.run(cmd=f'oc adm top node {ocp_node} --no-headers')
         if cmd_output != '':
             node_adm_result = (list(filter(None, cmd_output.split(' '))))
-            worker_name = node_adm_result[0]
+            worker_name = self.get_node_generic_name(node_adm_result[0])
+            # worker_name = node_adm_result[0]
             if worker_name not in self.__run_metadata['summary']['resources']['nodes'].keys():
                 self.__run_metadata['summary']['resources']['nodes'][worker_name] = {'name': node_adm_result[0], 'cores': node_adm_result[1], 'cpu_per': node_adm_result[2],
                              'mem_bytes': node_adm_result[3], 'mem_per': node_adm_result[4], "label": '' }
@@ -1139,7 +1156,8 @@ class OadpWorkloads(WorkloadsOperations):
         """
         method calculates diff between node resources via adm and updates dict with results
         """
-        node = adm_node_info[0]
+        node = self.get_node_generic_name(adm_node_info[0])
+        # node = adm_node_info[0]
         prev_core_total = self.__run_metadata['summary']['resources']['nodes'][node]['cpu_per']
         prev_core_total = prev_core_total.replace('%', '')
         current_core = adm_node_info[2].replace('%', '')
