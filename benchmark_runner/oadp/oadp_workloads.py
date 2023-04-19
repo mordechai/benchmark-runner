@@ -31,8 +31,11 @@ class OadpWorkloads(WorkloadsOperations):
         self.__namespace = self._environment_variables_dict.get('namespace', '')
         self.__oadp_workload = self._environment_variables_dict.get('oadp', '')
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
+        #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
+        #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
         self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', '')
-        # self.__oadp_scenario_name = 'restore-csi-busybox-perf-single-100-pods-rbd'
+        self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr')
+        self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset')
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
@@ -1386,6 +1389,10 @@ class OadpWorkloads(WorkloadsOperations):
         self.set_run_status()
         self.create_json_summary()
 
+        #Post Run Cleanup
+        self.cleaning_up_oadp_resources(test_scenario)
+
+
         if os.path.exists(os.path.join(self.__result_report)) and not os.stat(self.__result_report).st_size == 0:
             self.__ssh.run(cmd=f'cp {self.__result_report} {self._run_artifacts_path}')
             return True
@@ -1404,6 +1411,23 @@ class OadpWorkloads(WorkloadsOperations):
             logger.info(f'upload index: {index}')
             self._es_operations.upload_to_elasticsearch(index=index, data=result_report_json_data)
             raise MissingResultReport()
+
+    @logger_time_stamp
+    def cleaning_up_oadp_resources(self, scenario):
+        """
+        method removes oapd CR or dataset if set via CLI option
+        """
+        if self.__oadp_cleanup_cr_post_run:
+            logger.info(f'*** Attempting post run: clean up of OADP CR *** as self.__oadp_cleanup_cr_post_run: {self.__oadp_cleanup_cr_post_run}')
+            self.delete_oadp_custom_resources( ns=scenario['args']['namespaces_to_backup'], cr_type=scenario['args']['OADP_CR_TYPE'], cr_name=scenario['args']['OADP_CR_NAME'])
+        else:
+            logger.info(f'*** Skipping post run cleaning up of OADP CR *** as self.__oadp_cleanup_cr_post_run: {self.__oadp_cleanup_cr_post_run}')
+        if self.__oadp_cleanup_dataset_post_run:
+            logger.info(f'*** Attempting post run: clean up of OADP dataset *** as self.__oadp_cleanup_dataset_post_run: {self.__oadp_cleanup_dataset_post_run}')
+            self.delete_oadp_source_dataset(target_namespace=scenario['args']['namespaces_to_backup'])
+        else:
+            logger.info(f'*** Skipping post run cleaning up of OADP dataset  *** as self.__oadp_cleanup_dataset_post_run: {self.__oadp_cleanup_dataset_post_run}')
+
 
     @logger_time_stamp
     def generate_elastic_index(self, scenario):

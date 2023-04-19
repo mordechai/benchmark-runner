@@ -50,6 +50,8 @@ class EnvironmentVariables:
         self._environment_variables_dict['workload'] = EnvironmentVariables.get_env('WORKLOAD', 'oadp')
         self._environment_variables_dict['kubeadmin_password'] = EnvironmentVariables.get_env('KUBEADMIN_PASSWORD', '')
         self._environment_variables_dict['oadp_scenario'] = EnvironmentVariables.get_env('OADP_SCENARIO', '')
+        self._environment_variables_dict['oadp_cleanup_cr'] = EnvironmentVariables.get_boolean_from_environment('OADP_CLEANUP_CR', False)
+        self._environment_variables_dict['oadp_cleanup_dataset'] = EnvironmentVariables.get_boolean_from_environment('OADP_CLEANUP_DATASET', False)
 
         # PIN=node selector
         self._environment_variables_dict['pin_node_benchmark_operator'] = EnvironmentVariables.get_env('PIN_NODE_BENCHMARK_OPERATOR', 'worker000-r640')
@@ -57,7 +59,7 @@ class EnvironmentVariables:
         self._environment_variables_dict['pin_node2'] = EnvironmentVariables.get_env('PIN_NODE2', 'worker002-r640')
 
         # ElasticSearch
-        self._environment_variables_dict['elasticsearch'] = EnvironmentVariables.get_env('ELASTICSEARCH', 'f01-h08-000-1029u.rdu2.scalelab.redhat.com')
+        self._environment_variables_dict['elasticsearch'] = EnvironmentVariables.get_env('ELASTICSEARCH', 'rhev-gw.rdu2.scalelab.redhat.com')
         self._environment_variables_dict['elasticsearch_port'] = EnvironmentVariables.get_env('ELASTICSEARCH_PORT', '9200')
         self._environment_variables_dict['elasticsearch_user'] = EnvironmentVariables.get_env('ELASTICSEARCH_USER', '')
         self._environment_variables_dict['elasticsearch_password'] = EnvironmentVariables.get_env('ELASTICSEARCH_PASSWORD', '')
@@ -175,7 +177,7 @@ class EnvironmentVariables:
         # IBM data
         self._environment_variables_dict['region_name'] = EnvironmentVariables.get_env('IBM_REGION_NAME', '')
         # None(default) - must for unittest
-        self._environment_variables_dict['endpoint_url'] = EnvironmentVariables.get_env('IBM_ENDPOINT_URL', 'http://f01-h08-000-1029u.rdu2.scalelab.redhat.com:9000')
+        self._environment_variables_dict['endpoint_url'] = EnvironmentVariables.get_env('IBM_ENDPOINT_URL', 'http://rhev-gw.rdu2.scalelab.redhat.com:9000')
         self._environment_variables_dict['access_key_id'] = EnvironmentVariables.get_env('IBM_ACCESS_KEY_ID', 'H6N29y9YA2Y74Oi0')
         self._environment_variables_dict['secret_access_key'] = EnvironmentVariables.get_env('IBM_SECRET_ACCESS_KEY', 'kibv5Hrm4HK0IbtHNgNlKDIRytwKyIrg')
         self._environment_variables_dict['bucket'] = EnvironmentVariables.get_env('IBM_BUCKET', 'oadp-result-bucket')
