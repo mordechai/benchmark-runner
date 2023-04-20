@@ -679,12 +679,12 @@ class OadpWorkloads(WorkloadsOperations):
             while current_wait_time <= testcase_timeout:
                 state = self.__ssh.run(
                     cmd=f"oc get {cr_type}/{cr_name} -n openshift-adp -o jsonpath={jsonpath}")
-                if state != 'InProgress':
-                    print(f"current status: CR {cr_name} state: {state} !=InProgress")
+                if state in ['Completed', 'Failed', 'PartiallyFailed']:
+                    print(f"current status: CR {cr_name} state: {state} in ['Completed', 'Failed', 'PartiallyFailed']")
                     return True
                     # sleep for x
                 else:
-                    print(f"current cr state is: {state} meaning its still showing InProgress")
+                    print(f"current cr state is: {state} meaning its still running as its NOT in 'Completed', 'Failed', 'PartiallyFailed'")
                     time.sleep(3)
             current_wait_time += 3
         except Exception as err:
