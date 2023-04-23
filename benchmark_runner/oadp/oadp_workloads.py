@@ -25,7 +25,7 @@ class OadpWorkloads(WorkloadsOperations):
         super().__init__()
         self.__oadp_path = '/tmp/mpqe-scale-scripts/mtc-helpers/busybox'
         self.__oadp_base_dir = '/tmp/mpqe-scale-scripts/oadp-helpers'
-        self.__oadp_scenario_data = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/internal_data/single_ns.yaml'
+        self.__oadp_scenario_data = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/internal_data/tests.yaml'
         self.__oadp_promql_queries = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/metrics/metrics-oadp.yaml'
         # environment variables
         self.__namespace = self._environment_variables_dict.get('namespace', '')
@@ -33,9 +33,9 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', '')
-        self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr')
-        self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset')
+        self.__oadp_scenario_name  = self._environment_variables_dict.get('oadp_scenario', '')
+        self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
+        self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
@@ -849,8 +849,12 @@ class OadpWorkloads(WorkloadsOperations):
             if cr_name != '*' and cr_name != '':
                 del_cmd = self.__ssh.run(
                     cmd=f'oc -n {ns} exec deployment/velero -c velero -it -- ./velero {cr_type} delete {cr_name} --confirm')
-                if del_cmd.find('submitted successfully') < 0:
-                    print("Error did not delete successfully")
+                if del_cmd != None and ('submitted successfully' in del_cmd or 'deleted' in del_cmd):
+                    logger.info("Error delete completed successfully")
+                elif del_cmd != None and f"No {cr_type}s found" in del_cmd:
+                    logger.info('CR not found so delete failed as it doesnt exist')
+                else:
+                    logger.info(f"=== Attempt to delete was not successful the output was: {del_cmd}")
         self.oadp_timer(action="stop", transaction_name='Delete existing OADP CR')
 
     @logger_time_stamp
@@ -1418,8 +1422,13 @@ class OadpWorkloads(WorkloadsOperations):
         method removes oapd CR or dataset if set via CLI option
         """
         if self.__oadp_cleanup_cr_post_run:
-            logger.info(f'*** Attempting post run: clean up of OADP CR *** as self.__oadp_cleanup_cr_post_run: {self.__oadp_cleanup_cr_post_run}')
-            self.delete_oadp_custom_resources( ns=scenario['args']['namespaces_to_backup'], cr_type=scenario['args']['OADP_CR_TYPE'], cr_name=scenario['args']['OADP_CR_NAME'])
+            if 'restore' == scenario['testtype']:
+                logger.info(f"*** Attempting post run: clean up for {scenario['args']['OADP_CR_NAME']} that is a {scenario['testtype']} relevant CRs to remove are: restore: {scenario['args']['OADP_CR_NAME']} & relevant CRs related backup CR: {scenario['args']['backup_name']} ")
+                self.delete_oadp_custom_resources( 'openshift-adp', cr_type=scenario['args']['OADP_CR_TYPE'], cr_name=scenario['args']['OADP_CR_NAME'])
+                self.delete_oadp_custom_resources('openshift-adp', cr_type='backup', cr_name=scenario['args']['backup_name'])
+            if 'backup' == scenario['testtype']:
+                logger.info(f"*** Attempting post run: clean up for {scenario['args']['OADP_CR_NAME']} that is a {scenario['testtype']} relevant CRs to remove are: {scenario['args']['OADP_CR_NAME']}")
+                self.delete_oadp_custom_resources('openshift-adp',cr_type=scenario['args']['OADP_CR_TYPE'],cr_name=scenario['args']['OADP_CR_NAME'])
         else:
             logger.info(f'*** Skipping post run cleaning up of OADP CR *** as self.__oadp_cleanup_cr_post_run: {self.__oadp_cleanup_cr_post_run}')
         if self.__oadp_cleanup_dataset_post_run:
