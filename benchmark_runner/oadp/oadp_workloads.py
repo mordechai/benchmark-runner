@@ -666,7 +666,7 @@ class OadpWorkloads(WorkloadsOperations):
                 logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
 
     @logger_time_stamp
-    def wait_for_condition_of_oadp_cr(self, cr_type, cr_name, testcase_timeout=3600):
+    def wait_for_condition_of_oadp_cr(self, cr_type, cr_name, testcase_timeout=43200):
         """
         method polls for condition of OADP CR
         """
