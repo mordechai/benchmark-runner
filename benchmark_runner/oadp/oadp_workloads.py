@@ -1364,7 +1364,6 @@ class OadpWorkloads(WorkloadsOperations):
         # Get Node and Pod Resource prior to test
         self.collect_all_node_resource()
         self.get_resources_per_ns(namespace='openshift-adp', label="start")
-        self.get_resources_per_ns(namespace='openshift-storage', label="start")
 
         # Launch OADP scenario
         self.oadp_execute_scenario(test_scenario, run_method='python')
@@ -1372,7 +1371,6 @@ class OadpWorkloads(WorkloadsOperations):
         # Get Pod Resource after the test
         self.collect_all_node_resource()
         self.get_resources_per_ns(namespace='openshift-adp', label="end")
-        self.get_resources_per_ns(namespace='openshift-storage', label="end")
 
         # Parse result CR for status, and timestamps
         self.parse_oadp_cr(ns='openshift-adp', cr_type=test_scenario['args']['OADP_CR_TYPE'],
