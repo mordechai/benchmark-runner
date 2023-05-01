@@ -2,6 +2,9 @@ import logging
 import os
 import json
 import time
+import random
+import string
+
 
 import yaml
 import re
@@ -526,15 +529,17 @@ class OadpWorkloads(WorkloadsOperations):
         generated_name = 'perf-datagen-' + generated_name.lower() + '-' + sc[-3:]
 
         # Create Pods via Ansible population flow
-        for i in num_of_pods_expected:
-            if num_of_pods_expected == 1:
-                pvc_name = 'pvc-' + generated_name
-                deployment_name = 'deploy-' + generated_name
-            elif num_of_pods_expected > 1:
-                suffix = ''.join(random.choices(string.ascii_letters+string.digits, k=5))
-                pvc_name = 'pvc-' + generated_name + suffix.lower()
-                deployment_name = 'deploy-' + generated_name + suffix.lower()
+        for i in range(num_of_pods_expected):
+            # if num_of_pods_expected == 1:
+            #     pvc_name = 'pvc-' + generated_name + '-' + i
+            #     deployment_name = 'deploy-' + generated_name + '-' + i
+            # elif num_of_pods_expected > 1:
+                # suffix = ''.join(random.choices(string.ascii_letters+string.digits, k=5))
+                # pvc_name = 'pvc-' + generated_name + suffix.lower()
+                # deployment_name = 'deploy-' + generated_name + suffix.lower()
             # var set up by role type
+            pvc_name = 'pvc-' + generated_name + '-' + str(i)
+            deployment_name = 'deploy-' + generated_name + '-' + str(i)
             if active_role == 'generator':
                 dir_count = test_scenario['dataset']['dir_count']
                 files_count = test_scenario['dataset']['files_count']
@@ -569,10 +574,10 @@ class OadpWorkloads(WorkloadsOperations):
         if not pods_ready_for_pv_util_validation:
             logger.error(f"Number of created pods running: {len(created_pods)} expected pods running should be {num_of_pods_expected}")
         else:
-            running_pods = self.__ssh.run(cmd=f'oc get pods -n {namespace} --field-selector status.phase=Running --no-headers -o custom-columns=":metadata.name"')
+            running_pods = self.get_list_of_pods(namespace=namespace)
             for pod in running_pods:
-                self.wait_until_process_inside_pod_completes(podname, namespace, process_text_to_monitor=mount_point,timeout_value=testcase_timeout)
-                logger.info(f"::INFO:: Population process inside pod {podname} in ns {namespace} has completed")
+                self.wait_until_process_inside_pod_completes(pod_name=pod, namespace=namespace, process_text_to_monitor=mount_point,timeout_value=testcase_timeout)
+                logger.info(f"::INFO:: Population process inside pod {pod} in ns {namespace} has completed")
 
 
     @logger_time_stamp
@@ -1387,7 +1392,7 @@ class OadpWorkloads(WorkloadsOperations):
             return False
         elif role == 'generator':
             # get list of running pods
-            pods_to_validate =  self.get_list_of_pods(namesapce=target_namespace)
+            pods_to_validate =  self.get_list_of_pods(namespace=target_namespace)
             if pods_to_validate == 0:
                 logger.error(f"No running pods were found in ns {target_namespace} expected {num_of_pods_expected}")
             else:
@@ -1395,7 +1400,7 @@ class OadpWorkloads(WorkloadsOperations):
                     pv_util_details_returned_by_pod = self.get_pod_pv_utilization_info_by_podname(scenario, pod)
                     pv_contents_as_expected = self.pv_contains_expected_data(scenario, pv_util_details_returned_by_pod)
                     if not pv_contents_as_expected:
-                        logger.warn(f'::: PV UTIL Contents check FAILURE:::  pv_contents_as_expected: value is: {pv_contents_as_expected} for pod: {pod} in ns {target_namespace}')
+                        logger.warn(f'::: PV UTIL Contents check FAILURE:::  pv_contents_as_expected: value is: {pv_contents_as_expected} for pod: {pod} in ns {target_namespace} pod returned: {pv_util_details_returned_by_pod}')
                         return False
                     else:
                         logger.info(f'::: PV UTIL Contents check successful for pod: {pod} in ns {target_namespace}')
