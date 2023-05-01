@@ -33,7 +33,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        self.__oadp_scenario_name  = self._environment_variables_dict.get('oadp_scenario', '')
+        self.__oadp_scenario_name  = '100pod-backup-vsm-pvc-util-4-1-0-cephrbd-6g' #self._environment_variables_dict.get('oadp_scenario', '')
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
         self.__result_report = '/tmp/oadp-report.json'
@@ -429,7 +429,10 @@ class OadpWorkloads(WorkloadsOperations):
         if role == 'BusyBoxPodSingleNS.sh':
             self.busybox_dataset_creation(scenario)
         if role == 'generator':
-            self.create_pvutil_dataset(scenario)
+            if num_of_assets_desired > 1:
+                self.create_multi_pvutil_dataset(scenario)
+            else:
+                self.create_pvutil_dataset(scenario)
 
     @logger_time_stamp
     def wait_until_process_inside_pod_completes(self, pod_name, namespace, process_text_to_monitor, timeout_value):
@@ -458,6 +461,7 @@ class OadpWorkloads(WorkloadsOperations):
         playbook_path = test_scenario['dataset']['playbook_path']
         pvc_size = test_scenario['dataset']['pv_size']
         dataset_path = test_scenario['dataset']['dataset_path']
+        num_of_pods_expected = test_scenario['dataset']['pods_per_ns']
         # common vars between roles
         namespace = test_scenario['args']['namespaces_to_backup']
         sc = test_scenario['dataset']['sc']
@@ -504,6 +508,74 @@ class OadpWorkloads(WorkloadsOperations):
             logger.info("role doesnt define")
 
     @logger_time_stamp
+    def create_multi_pvutil_dataset(self, test_scenario):
+        # common vars between roles
+        active_role = test_scenario['dataset']['role']
+        playbook_path = test_scenario['dataset']['playbook_path']
+        pvc_size = test_scenario['dataset']['pv_size']
+        dataset_path = test_scenario['dataset']['dataset_path']
+        num_of_pods_expected = test_scenario['dataset']['pods_per_ns']
+        create_data_ansible_output_responses = []
+        mount_point = test_scenario['dataset']['dataset_path']
+        namespace = test_scenario['args']['namespaces_to_backup']
+        sc = test_scenario['dataset']['sc']
+        testcase_timeout = int(test_scenario['args']['testcase_timeout'])
+        # generated_name for pv or namespaces
+        generated_name = test_scenario['testcase']
+        generated_name = generated_name.replace('.', '-')
+        generated_name = 'perf-datagen-' + generated_name.lower() + '-' + sc[-3:]
+
+        # Create Pods via Ansible population flow
+        for i in num_of_pods_expected:
+            if num_of_pods_expected == 1:
+                pvc_name = 'pvc-' + generated_name
+                deployment_name = 'deploy-' + generated_name
+            elif num_of_pods_expected > 1:
+                suffix = ''.join(random.choices(string.ascii_letters+string.digits, k=5))
+                pvc_name = 'pvc-' + generated_name + suffix.lower()
+                deployment_name = 'deploy-' + generated_name + suffix.lower()
+            # var set up by role type
+            if active_role == 'generator':
+                dir_count = test_scenario['dataset']['dir_count']
+                files_count = test_scenario['dataset']['files_count']
+                file_size = test_scenario['dataset']['files_size']
+                dept_count = test_scenario['dataset']['dept_count']
+                playbook_extra_var = (
+                    f"dir_count={dir_count}  files_count={files_count}  files_size={file_size}  dept_count={dept_count}  pvc_size={pvc_size} deployment_name={deployment_name} dataset_path={dataset_path} namespace={namespace} pvc_name={pvc_name}")
+
+            if active_role == 'dd_generator':
+                bs = test_scenario['dataset']['bs']
+                count = test_scenario['dataset']['count']
+                playbook_extra_var = (
+                    f"bs={bs} count={count}  pvc_size={pvc_size}  deployment_name={deployment_name} dataset_path={dataset_path} namespace={namespace} pvc_name={pvc_name}")
+
+            create_data_ansible_output = self.__ssh.run(cmd=f"ansible-playbook {playbook_path}  --extra-vars  '{playbook_extra_var}' -vvv")
+            create_data_ansible_output_responses.append(create_data_ansible_output)
+
+        # Validate Ansible Play execution is as expected
+        # sample expected output ok=4    changed=2    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+        num_of_validated_ansible_plays = 0
+        for response in create_data_ansible_output_responses:
+            ansible_play_invoked_successfully = self.validate_ansible_play(response)
+            if not ansible_play_invoked_successfully:
+                logger.warning(f"Ansible playbook validation failed for: {response}")
+            else:
+                num_of_validated_ansible_plays = num_of_validated_ansible_plays + 1
+        logger.info(f"::INFO:: Total ansible plays verified to have executed without runtime issues are: {num_of_validated_ansible_plays} out of expected {num_of_pods_expected} ")
+
+        # Verify pods in run state that are executing population on their pvs match expected numbers
+        # Previous check was for execution of ansible this check is for the pods which are in run state
+        pods_ready_for_pv_util_validation = self.verify_running_pods(num_of_pods_expected=num_of_pods_expected, target_namespace=namespace)
+        if not pods_ready_for_pv_util_validation:
+            logger.error(f"Number of created pods running: {len(created_pods)} expected pods running should be {num_of_pods_expected}")
+        else:
+            running_pods = self.__ssh.run(cmd=f'oc get pods -n {namespace} --field-selector status.phase=Running --no-headers -o custom-columns=":metadata.name"')
+            for pod in running_pods:
+                self.wait_until_process_inside_pod_completes(podname, namespace, process_text_to_monitor=mount_point,timeout_value=testcase_timeout)
+                logger.info(f"::INFO:: Population process inside pod {podname} in ns {namespace} has completed")
+
+
+    @logger_time_stamp
     def validate_ansible_play(self, playbook_output):
         """
         parses ansible playbook output to verify stdout cotians unreachable=0  failed=0
@@ -523,6 +595,51 @@ class OadpWorkloads(WorkloadsOperations):
             else:
                 logger.warn(f"ansible-playbook stdout did not contain expected values with regards to number of failures and unreachable related tasks : {playbook_output}")
                 return False
+
+    @logger_time_stamp
+    def get_pod_pv_utilization_info_by_podname(self, test_scenario, podname):
+        results_capacity_usage = {}
+        active_role = test_scenario['dataset']['role']
+        mount_point = test_scenario['dataset']['dataset_path']
+        namespace = test_scenario['args']['namespaces_to_backup']
+        disk_capacity = self.__ssh.run(
+            cmd=f"oc  exec -it -n{namespace} {podname} -- /bin/bash -c \"du -sh {mount_point}\"")
+        current_disk_capacity = disk_capacity.split('\n')[-1].split('\t')[0]
+        unit_disk_capacity = current_disk_capacity[-1]
+        results_capacity_usage['disk_capacity'] = current_disk_capacity
+        files_count = self.__ssh.run(
+            cmd=f"oc  exec -it -n{namespace} {podname} -- /bin/bash -c \"find {mount_point}* -type f -name \"my-random-file-*\" -o -name \"dd_file\" |wc -l\"")
+        current_files_count = files_count.split('\n')[-1].split('\t')[0]
+        results_capacity_usage['files_count'] = current_files_count
+        folders_count = self.__ssh.run(
+            cmd=f"oc  exec -it -n{namespace} {podname} -- /bin/bash -c \"find {mount_point}python/* -type d  |wc -l\"")
+        current_folders_count = folders_count.split('\n')[-1].split('\t')[0]
+        results_capacity_usage['folders_count'] = current_folders_count
+        results_capacity_usage['active_role'] = active_role
+        logger.info(f"get_pod_pv_utilization_info saw pv contained: {results_capacity_usage}")
+
+    @logger_time_stamp
+    def get_pod_pv_utilization_info_by_podname(self, test_scenario, podname):
+        results_capacity_usage = {}
+        active_role = test_scenario['dataset']['role']
+        mount_point = test_scenario['dataset']['dataset_path']
+        namespace = test_scenario['args']['namespaces_to_backup']
+        disk_capacity = self.__ssh.run(
+            cmd=f"oc  exec -it -n{namespace} {podname} -- /bin/bash -c \"du -sh {mount_point}\"")
+        current_disk_capacity = disk_capacity.split('\n')[-1].split('\t')[0]
+        unit_disk_capacity = current_disk_capacity[-1]
+        results_capacity_usage['disk_capacity'] = current_disk_capacity
+        files_count = self.__ssh.run(
+            cmd=f"oc  exec -it -n{namespace} {podname} -- /bin/bash -c \"find {mount_point}* -type f -name \"my-random-file-*\" -o -name \"dd_file\" |wc -l\"")
+        current_files_count = files_count.split('\n')[-1].split('\t')[0]
+        results_capacity_usage['files_count'] = current_files_count
+        folders_count = self.__ssh.run(
+            cmd=f"oc  exec -it -n{namespace} {podname} -- /bin/bash -c \"find {mount_point}python/* -type d  |wc -l\"")
+        current_folders_count = folders_count.split('\n')[-1].split('\t')[0]
+        results_capacity_usage['folders_count'] = current_folders_count
+        results_capacity_usage['active_role'] = active_role
+        logger.info(f"get_pod_pv_utilization_info saw pv contained: {results_capacity_usage}")
+        return results_capacity_usage
 
     @logger_time_stamp
     def get_pod_pv_utilization_info(self, test_scenario):
@@ -1269,14 +1386,19 @@ class OadpWorkloads(WorkloadsOperations):
             logger.warn(f'validate_dataset returning false for pod_presence_and_storage_as_expected: value is: {pod_presence_and_storage_as_expected}')
             return False
         elif role == 'generator':
-            pv_util_details_returned_by_pod = self.get_pod_pv_utilization_info(scenario)
-            pv_contents_as_expected = self.pv_contains_expected_data(scenario, pv_util_details_returned_by_pod)
-            if not pv_contents_as_expected:
-                logger.warn(
-                    f'validate_dataset returning false for pv_contents_as_expected: value is: {pv_contents_as_expected}')
-                return False
-        logger.info(
-            f'validate_dataset has passed all validations returning true')
+            # get list of running pods
+            pods_to_validate =  self.get_list_of_pods(namesapce=target_namespace)
+            if pods_to_validate == 0:
+                logger.error(f"No running pods were found in ns {target_namespace} expected {num_of_pods_expected}")
+            else:
+                for pod in pods_to_validate:
+                    pv_util_details_returned_by_pod = self.get_pod_pv_utilization_info_by_podname(scenario, pod)
+                    pv_contents_as_expected = self.pv_contains_expected_data(scenario, pv_util_details_returned_by_pod)
+                    if not pv_contents_as_expected:
+                        logger.warn(f'::: PV UTIL Contents check FAILURE:::  pv_contents_as_expected: value is: {pv_contents_as_expected} for pod: {pod} in ns {target_namespace}')
+                        return False
+                    else:
+                        logger.info(f'::: PV UTIL Contents check successful for pod: {pod} in ns {target_namespace}')
         return True
 
     @logger_time_stamp
