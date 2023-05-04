@@ -36,7 +36,8 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        self.__oadp_scenario_name  = 'restore-1pod-backup-csi-pvc-util-4-1-0-cephrbd-6g' #self._environment_variables_dict.get('oadp_scenario', '')
+        self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
+        # self.__oadp_scenario_name  = 'backup-csi-pvc-util-2-1-5-rbd-swift-1.5t' # backup-100pod-backup-vsm-pvc-util-4-1-0-cephrbd-6g' #self._environment_variables_dict.get('oadp_scenario', '')
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
         self.__result_report = '/tmp/oadp-report.json'
@@ -46,6 +47,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__ssh = SSH()
         self.__oadp_resources = {}
         self.__oadp_runtime_resource_mapping = {}
+        self.__oadp_dpa = 'example-velero'
         self.__result_dicts = []
         self.__run_metadata = {
             "index": '',
@@ -769,6 +771,74 @@ class OadpWorkloads(WorkloadsOperations):
         else:
             return False
 
+    def get_dpa(self, oadp_namespace):
+        """
+        method gets name of dpa
+        """
+        # Get DPA contents
+        dpa_data = self.get_oc_resource_to_json(resource_type='dpa', resource_name=self.__oadp_dpa, namespace=oadp_namespace)
+        if bool(dpa_data) == False:
+            logger.error(':: ERROR :: DPA is not present command to get dpa as json resulted in empty dict')
+
+        dpa_name = dpa_data['metadata']['name']
+        is_restic_enabled = dpa_data['spec']['configuration']['restic']['enable']
+        velero_enabled_plugins = dpa_data['spec']['configuration']['velero']['defaultPlugins']
+        # check for restic secret
+        restic_secret = self.get_oc_resource_to_json(resource_type='secret', resource_name='restic-secret', namespace=oadp_namespace)
+        if bool(restic_secret) == False:
+            logger.info(':: INFO :: Restic Secret not found - will deploy it now')
+            cmd_restic_secret_apply = self.__ssh.run(cmd=f"oc apply -f {self.__oadp_base_dir}/templates/restic_secret.yaml")
+            if (not 'created'  in  cmd_restic_secret_apply and not 'configured' in cmd_restic_secret_apply):
+                logger.error(':: ERROR :: Restic Secret not deployed correctly - following output returned: {}')
+            else:
+                logger.info(':: INFO :: Restic Secret created successfully')
+        #  Enable datamover / VSM
+        if is_restic_enabled:
+            # disabple restic plugin
+            json_query = '{"spec": {"configuration": {"restic": {"enable": false}}}}'
+            disable_restic_plugin = self.__ssh.run(cmd=f"oc patch dpa {dpa_name} -n {oadp_namespace} --type merge -p '{json_query}'")
+            if 'error' in disable_restic_plugin:
+                logger.error(f':: ERROR :: Attemmpted to disable restic - following output returned: {disable_restic_plugin}')
+            else:
+                logger.info(':: INFO :: Restic Secret disabled successfully')
+        if 'vsm' not in velero_enabled_plugins:
+            # Get S3 URL
+            json_query = '{.spec.host}'
+            cmd_get_s3_url = self.__ssh.run(cmd=f" oc get route s3 -n openshift-storage -o jsonpath='{json_query}'")
+            if (cmd_get_s3_url != '') and (not 'error' in cmd_get_s3_url):
+                logger.info(f':: INFO :: Setting S3 {cmd_get_s3_url} to {dpa_name}')
+                json_query = '[{"op": "replace", "path": "/spec/backupLocations/0/velero/config/s3Url", "value": "http://' + f'{cmd_get_s3_url}"' +'}]'
+                cmd_setting_s3_in_dpa = self.__ssh.run( cmd=f"oc patch dpa {dpa_name} -n {oadp_namespace} --type merge -p '{json_query}'")
+                if (cmd_setting_s3_in_dpa != '') and (not 'error' in cmd_setting_s3_in_dpa):
+                    logger.info(f':: INFO :: S3 set sucessfully {cmd_setting_s3_in_dpa} to {dpa_name}')
+            # enable vsm
+            json_query = '{"spec": {"features": {"dataMover": {"enable": true}}}}'
+            enable_vsm_plugin = self.__ssh.run(cmd=f"oc patch dpa {dpa_name} -n {oadp_namespace} --type merge -p '{json_query}'")
+            if (enable_vsm_plugin != '') and (not 'error' in enable_vsm_plugin):
+                logger.info(f':: INFO :: Datamover is now enabled for {dpa_name}')
+
+    def enable_datamover(self, oadp_namespace, sceanrio ):
+        """
+        method enables dpa
+        1) enable restic secret via oc apply -f yaml
+        2) Set SC (in this case rbd per scenario details)
+        3) disabple restic plugin
+        4) Set SC
+        5) enable_vsm_plugin
+        6) patch dataprotectionapplication example-velero -n openshift-adp --type=json -p='[{"op": "replace", "path": "/spec/backupLocations/0/velero/config/s3Url", "value": "http://s3-openshift-storage.apps.cloud20.rdu2.scalelab.redhat.com"}]'
+        """
+        # 1) enable restic secret via oc apply -f yaml
+        cmd_create_restic_secret = self.__ssh.run(cmd=f"oc apply -f {self.__oadp_base_dir}/templates/restic_secret.yaml")
+        # 2) Set SC (in this case rbd per scenario details)
+        # 3) disabple restic plugin
+        json_query =  '{"spec": {"configuration": {"restic": {"enable": false}}}}'
+        disable_restic_plugin = self.__ssh.run(cmd=f"oc patch dpa example-velero --type merge -p '{json_query}'")
+        # 4) Set SC & relevant volumesnapshot class
+        # 5) Enable datamover
+        json_query = '{"spec": {"features": {"dataMover": {"enable": true}}}}'
+        enable_vsm_plugin = self.__ssh.run(cmd=f"oc patch dpa example-velero --type merge -p '{json_query}'")
+
+
     @logger_time_stamp
     def set_volume_snapshot_class(self, sc):
         """
@@ -1166,6 +1236,17 @@ class OadpWorkloads(WorkloadsOperations):
         else:
             return []
 
+    def get_oc_resource_to_json(self, resource_type, resource_name, namespace):
+        """
+        method returns oc resource info
+        """
+        resources_returned = self.__ssh.run(cmd=f'oc get {resource_type} {resource_name} -n {namespace} -o json')
+        if 'not found' in resources_returned:
+            logger.info(f"::info:: oc get {resource_type} {resource_name} -n {namespace} => Not Found")
+            return {}
+        else:
+            return json.loads(resources_returned)
+
     @logger_time_stamp
     def get_list_of_pods(self, namespace):
         """
@@ -1401,6 +1482,7 @@ class OadpWorkloads(WorkloadsOperations):
         """
         # Load Scenario Details
         test_scenario = self.load_test_scenario()
+
 
         # Get OADP, Velero, Storage Details
         self.oadp_get_version_info()
