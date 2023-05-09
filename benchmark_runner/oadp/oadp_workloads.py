@@ -36,7 +36,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
+        self.__oadp_scenario_name = 'backup-100pod-backup-vsm-pvc-util-4-1-0-cephrbd-6g' #self._environment_variables_dict.get('oadp_scenario','')
         # self.__oadp_scenario_name  = 'backup-csi-pvc-util-2-1-5-rbd-swift-1.5t' # backup-100pod-backup-vsm-pvc-util-4-1-0-cephrbd-6g' #self._environment_variables_dict.get('oadp_scenario', '')
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
@@ -370,7 +370,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.oadp_timer(action="stop", transaction_name='delete_oadp_source_dataset')
 
     @logger_time_stamp
-    def verify_pod_presence_and_storage(self, num_of_pods_expected, target_namespace, expected_sc, expected_size, skip_dataset_validation):
+    def  verify_pod_presence_and_storage(self, num_of_pods_expected, target_namespace, expected_sc, expected_size, skip_dataset_validation):
         '''
         checks pod presence via func verify_running_pods
         checks pod's pv storage class used, and pv size via func verify_pod_pv_size_and_sc
@@ -771,6 +771,105 @@ class OadpWorkloads(WorkloadsOperations):
         else:
             return False
 
+    def verify_volsync_present(self):
+        """
+        return true or false if volsync present
+        """
+        cmd_volsync_status = self.__ssh.run(
+            cmd="oc get csv -n openshift-operators | grep VolSync | awk {'print $5'}")
+        if 'error' in cmd_volsync_status or cmd_volsync_status == '':
+            logger.error(
+                f':: ERROR :: Volsync not installed {cmd_volsync_status}')
+            return False
+        if cmd_volsync_status == 'Succeeded':
+            logger.info(':: INFO :: Volsync is present')
+            return True
+
+    def setup_ocs_cephfs_shallow(self):
+        """
+        sets up ocs-storagecluster-cephfs-shallow for 4.12
+        """
+        cmd_create_cephfs_shallow_sc = self.__ssh.run(cmd=f"oc apply -f {self.__oadp_base_dir}/templates/cephfs-shallow.yaml")
+        if (not 'created' in cmd_create_cephfs_shallow_sc and not 'configured' in cmd_create_cephfs_shallow_sc):
+            logger.error(f':: ERROR :: cephfs-shallow not deployed correctly - following output returned: {cmd_create_cephfs_shallow_sc}')
+        else:
+            logger.info(':: INFO :: cephfs-shallow sc is present')
+
+    def config_dpa_for_cephfs_shallow(self, enable, oadp_namespace):
+        """
+        method adds or removes cephfs-shallow to dpa
+        """
+        if enable:
+            query = '{"spec": {"features": {"dataMover": {"volumeOptions": {"destinationVolumeOptions": {"accessMode": "ReadOnlyMany","cacheAccessMode": "ReadWriteOnce","storageClassName": "ocs-storagecluster-cephfs-shallow","moverSecurityContext": true}, "sourceVolumeOptions": {"accessMode": "ReadOnlyMany","cacheAccessMode": "ReadWriteMany","cacheStorageClassName": "ocs-storagecluster-cephfs","moverSecurityContext": true,"storageClassName": "ocs-storagecluster-cephfs-shallow"}}}}}}'
+            self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
+                                   patch_type='merge',
+                                   patch_json=query)
+        if not enable:
+            query = '[{"op":"remove", "path": "/spec/features/dataMover/volumeOptions"}]'
+            self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
+                                   patch_type='json',
+                                   patch_json=query)
+
+
+    def config_datamover(self, oadp_namespace, scenario):
+        """
+        method for customizing datamover concurrency and timeout
+        eg: # setting values in dpa from yaml
+            datamover:
+                maxConcurrentBackupVolumes": 30
+                maxConcurrentRestoreVolumes": 10
+                timeout": 5m
+            or
+            # removing values from DPA
+            dataMover:
+               maxConcurrentBackupVolumes: remove
+               maxConcurrentRestoreVolumes: remove
+               timeout: remove
+        if any of value of these key pairs =='remove'
+        """
+        set_maxConcurrentBackupVolumes = scenario['config']['dataMover'].get('maxConcurrentBackupVolumes', False)
+        set_maxConcurrentRestoreVolumes = scenario['config']['dataMover'].get('maxConcurrentRestoreVolumes', False)
+        set_timeout = scenario['config']['dataMover'].get('timeout', False)
+
+        if set_maxConcurrentBackupVolumes != False:
+            value = scenario['config']['dataMover']['maxConcurrentBackupVolumes']
+            if value != 'remove':
+                query = '{"spec": {"features": {"dataMover": {"maxConcurrentBackupVolumes": ' + f'"{value}"' + '}}}}'
+                self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
+                                   patch_type='merge',
+                                   patch_json=query)
+            else:
+                query = '[{"op":"remove", "path": "/spec/features/dataMover/maxConcurrentBackupVolumes"}]'
+                self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
+                                       patch_type='json',
+                                       patch_json=query)
+
+        if set_maxConcurrentRestoreVolumes != False:
+            value = scenario['config']['dataMover']['maxConcurrentRestoreVolumes']
+            if value != 'remove':
+                query = '{"spec": {"features": {"dataMover": {"maxConcurrentRestoreVolumes": ' + f'"{value}"' + '}}}}'
+                self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
+                                   patch_type='merge',
+                                   patch_json=query)
+            else:
+                query = '[{"op":"remove", "path": "/spec/features/dataMover/maxConcurrentRestoreVolumes"}]'
+                self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
+                                       patch_type='json',
+                                       patch_json=query)
+
+        if set_timeout != False:
+            value = scenario['config']['dataMover']['timeout']
+            if value != 'remove':
+                query = '{"spec": {"features": {"dataMover": {"timeout": ' + f'"{value}"' + '}}}}'
+                self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
+                                   patch_type='merge',
+                                   patch_json=query)
+            else:
+                query = '[{"op":"remove", "path": "/spec/features/dataMover/timeout"}]'
+                self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
+                                       patch_type='json',
+                                       patch_json=query)
+
     def enable_datamover(self, oadp_namespace, scenario):
         """
         # can handle sc and vsc defaults before this invoked.
@@ -800,6 +899,8 @@ class OadpWorkloads(WorkloadsOperations):
                 logger.error(':: ERROR :: Restic Secret not deployed correctly - following output returned: {}')
             else:
                 logger.info(':: INFO :: Restic Secret created successfully')
+        # patch restic-secret to dpa
+        self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace='openshift-adp', patch_type='merge', patch_json='{"spec": {"features": {"dataMover": {"credentialName": "restic-secret"}}}}')
         #  Enable datamover / VSM
         if is_restic_enabled:
             # disabple restic plugin
@@ -818,6 +919,7 @@ class OadpWorkloads(WorkloadsOperations):
             cmd_setting_s3_in_dpa = self.__ssh.run( cmd=f"oc patch dataprotectionapplication {dpa_name} -n {oadp_namespace} --type=json -p='{json_query}'")
             if (cmd_setting_s3_in_dpa != '') and (not 'error' in cmd_setting_s3_in_dpa):
                 logger.info(f':: INFO :: S3 set sucessfully {cmd_setting_s3_in_dpa} to {dpa_name}')
+        self.verify_volsync_present()
         # enable vsm
         if 'vsm' not in velero_enabled_plugins:
             logger.info(f':: INFO :: Setting VSM to defaultplugins in {dpa_name}')
@@ -831,8 +933,15 @@ class OadpWorkloads(WorkloadsOperations):
         enable_dataMover = self.__ssh.run(cmd=f"oc patch dpa {dpa_name} -n {oadp_namespace} --type merge -p '{json_query}'")
         if (enable_dataMover != '') and (not 'error' in enable_dataMover):
             logger.info(f':: INFO :: Datamover is now enabled for {dpa_name}')
-        #kubectl patch dataprotectionapplication example-velero -n openshift-adp --type=json -p='[{"op": "add", "path": "/spec/configuration/velero/defaultPlugins/-", "value": "new_plugin"}]'
 
+    def disable_datamover(self, oadp_namespace):
+        """
+        method disables datamover from dpa
+        """
+        query = '{"spec": {"features": {"dataMover": {"enable": false}}}}'
+        self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
+                               patch_type='merge',
+                               patch_json=query)
 
     @logger_time_stamp
     def set_volume_snapshot_class(self, sc):
@@ -841,7 +950,7 @@ class OadpWorkloads(WorkloadsOperations):
         """
         if sc == 'ocs-storagecluster-ceph-rbd':
             cmd_set_volume_snapshot_class = self.__ssh.run(cmd=f"oc apply -f {self.__oadp_base_dir}/vsc-cephRBD.yaml")
-        if sc == 'ocs-storagecluster-cephfs':
+        if sc == 'ocs-storagecluster-cephfs' or 'ocs-storagecluster-cephfs-shallow':
             cmd_set_volume_snapshot_class = self.__ssh.run(cmd=f"oc apply -f {self.__oadp_base_dir}/vsc-cephFS.yaml")
         expected_result_output = ['created', 'unchanged', 'configured']
         if any(ext in cmd_set_volume_snapshot_class for ext in expected_result_output) == False:
@@ -855,6 +964,11 @@ class OadpWorkloads(WorkloadsOperations):
         """
         current_sc = self.get_default_storage_class()
         if current_sc != sc:
+            if current_sc == 'ocs-storagecluster-cephfs-shallow':
+                current_oc_version = packaging.version.parse(self._oc.get_ocp_server_version())
+                minimal_supported_oc_version = packaging.version.parse('4.12.0')
+                if current_oc_version < minimal_supported_oc_version:
+                    logger.error(f":: ERROR :: CEPHFS-Shallow set to desired sc on unsupported oc version.  Please check your yaml scenario {self.__oadp_scenario_name}  for the storage class is set {sc} which requires {minimal_supported_oc_version}, this env is: {current_oc_version} ")
             #set desired sc as default
             json_sc = '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
             set_def_sc_cmd = self.__ssh.run(cmd=f"oc patch storageclass {sc} -p '{json_sc}'")
@@ -871,6 +985,25 @@ class OadpWorkloads(WorkloadsOperations):
                 set_sc_as_non_default_cmd = self.__ssh.run(cmd=f"oc patch storageclass {storage} -p '{json_sc}'")
                 if set_sc_as_non_default_cmd.find('patched') < 0:
                     logger.warn(f"Note that storage {storage} was set  is-default-class:false as its not desired sc of {sc} ")
+
+    def patch_oc_resource(self, resource_type, resource_name, namespace, patch_type, patch_json):
+        """
+        method returns oc resource info
+        """
+        oc_patch_cmd = ''
+        if patch_type == 'json':
+            oc_patch_cmd = f"oc patch {resource_type} {resource_name} -n {namespace} --type={patch_type} -p='{patch_json}'"
+        else:
+            oc_patch_cmd = f"oc patch {resource_type} {resource_name} -n {namespace} --type {patch_type} -p '{patch_json}'"
+        logger.info (f":: INFO :: Attempting OC PATCH => {oc_patch_cmd}")
+        oc_patch_response = self.__ssh.run(cmd=f"{oc_patch_cmd}")
+        expected_result_output = ['patched', 'unchanged', 'configured', 'no change']
+        # negative_result_output = ['not found', 'invalid', 'conflict', 'unauthorized', 'forbidden']
+        if any(ext in oc_patch_response for ext in expected_result_output) == False:
+            logger.exception(f":: ERROR :: Unable to process patch command: {oc_patch_cmd}  resulted in {oc_patch_response}")
+        else:
+            logger.info(
+                f":: INFO :: Succesful patch command: {oc_patch_cmd}  resulted in {oc_patch_response}")
 
     @logger_time_stamp
     def get_default_storage_class(self):
@@ -1495,8 +1628,22 @@ class OadpWorkloads(WorkloadsOperations):
         expected_sc = test_scenario['dataset']['sc']
         expected_size = test_scenario['dataset']['pv_size']
 
+        # Setup Default SC and Volume Snapshot Class
         self.set_default_storage_class(expected_sc)
         self.set_volume_snapshot_class(expected_sc)
+
+        # Setup Datamover if needed
+        if test_scenario['args']['plugin'] == 'vsm':
+            self.enable_datamover(oadp_namespace='openshift-adp', scenario=test_scenario)
+            self.config_datamover(oadp_namespace='openshift-adp', scenario=test_scenario)
+            if expected_sc == 'ocs-storagecluster-cephfs-shallow':
+                self.config_dpa_for_cephfs_shallow(enable=True,oadp_namespace='openshift-adp')
+            else:
+                self.config_dpa_for_cephfs_shallow(enable=False,oadp_namespace='openshift-adp')
+        else:
+            # disable datamover / verify cephfs-shallow isnt set in dpa
+            self.config_dpa_for_cephfs_shallow(enable=False,oadp_namespace='openshift-adp')
+            self.disable_datamover(oadp_namespace='openshift-adp')
 
         # when performing backup
         # Check if source namespace aka our dataset is preseent, if dataset not prsent then create it
