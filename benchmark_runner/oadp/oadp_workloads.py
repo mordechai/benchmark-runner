@@ -771,9 +771,17 @@ class OadpWorkloads(WorkloadsOperations):
         else:
             return False
 
-    def get_dpa(self, oadp_namespace):
+    def enable_datamover(self, oadp_namespace, scenario):
         """
-        method gets name of dpa
+        # can handle sc and vsc defaults before this invoked.
+        method enables vsm / datamover
+        0) Get DPA values
+        1) enable restic secret via oc apply -f yaml
+        2) Set SC (in this case rbd per scenario details)
+        3) disabple restic plugin
+        4) Set SC
+        5) enable_vsm_plugin
+        6) patch dataprotectionapplication example-velero -n openshift-adp --type=json -p='[{"op": "replace", "path": "/spec/backupLocations/0/velero/config/s3Url", "value": "http://s3-openshift-storage.apps.cloud20.rdu2.scalelab.redhat.com"}]'
         """
         # Get DPA contents
         dpa_data = self.get_oc_resource_to_json(resource_type='dpa', resource_name=self.__oadp_dpa, namespace=oadp_namespace)
@@ -801,42 +809,29 @@ class OadpWorkloads(WorkloadsOperations):
                 logger.error(f':: ERROR :: Attemmpted to disable restic - following output returned: {disable_restic_plugin}')
             else:
                 logger.info(':: INFO :: Restic Secret disabled successfully')
+        # Get S3 URL
+        json_query = '{.spec.host}'
+        cmd_get_s3_url = self.__ssh.run(cmd=f" oc get route s3 -n openshift-storage -o jsonpath='{json_query}'")
+        if (cmd_get_s3_url != '') and (not 'error' in cmd_get_s3_url):
+            logger.info(f':: INFO :: Setting S3 {cmd_get_s3_url} to {dpa_name}')
+            json_query = f"""[{{"op": "replace", "path": "/spec/backupLocations/0/velero/config/s3Url", "value": "http://{cmd_get_s3_url}"}}]"""
+            cmd_setting_s3_in_dpa = self.__ssh.run( cmd=f"oc patch dataprotectionapplication {dpa_name} -n {oadp_namespace} --type=json -p='{json_query}'")
+            if (cmd_setting_s3_in_dpa != '') and (not 'error' in cmd_setting_s3_in_dpa):
+                logger.info(f':: INFO :: S3 set sucessfully {cmd_setting_s3_in_dpa} to {dpa_name}')
+        # enable vsm
         if 'vsm' not in velero_enabled_plugins:
-            # Get S3 URL
-            json_query = '{.spec.host}'
-            cmd_get_s3_url = self.__ssh.run(cmd=f" oc get route s3 -n openshift-storage -o jsonpath='{json_query}'")
-            if (cmd_get_s3_url != '') and (not 'error' in cmd_get_s3_url):
-                logger.info(f':: INFO :: Setting S3 {cmd_get_s3_url} to {dpa_name}')
-                json_query = '[{"op": "replace", "path": "/spec/backupLocations/0/velero/config/s3Url", "value": "http://' + f'{cmd_get_s3_url}"' +'}]'
-                cmd_setting_s3_in_dpa = self.__ssh.run( cmd=f"oc patch dpa {dpa_name} -n {oadp_namespace} --type merge -p '{json_query}'")
-                if (cmd_setting_s3_in_dpa != '') and (not 'error' in cmd_setting_s3_in_dpa):
-                    logger.info(f':: INFO :: S3 set sucessfully {cmd_setting_s3_in_dpa} to {dpa_name}')
-            # enable vsm
-            json_query = '{"spec": {"features": {"dataMover": {"enable": true}}}}'
-            enable_vsm_plugin = self.__ssh.run(cmd=f"oc patch dpa {dpa_name} -n {oadp_namespace} --type merge -p '{json_query}'")
-            if (enable_vsm_plugin != '') and (not 'error' in enable_vsm_plugin):
-                logger.info(f':: INFO :: Datamover is now enabled for {dpa_name}')
+            logger.info(f':: INFO :: Setting VSM to defaultplugins in {dpa_name}')
+            json_query = """[{"op": "add", "path": "/spec/configuration/velero/defaultPlugins/-", "value": "vsm"}]"""
+            cmd_setting_vsm_in_defaultplugins = self.__ssh.run(
+                cmd=f"oc patch dataprotectionapplication {dpa_name} -n {oadp_namespace} --type=json -p='{json_query}'")
+            if (cmd_setting_vsm_in_defaultplugins != '') and (not 'error' in cmd_setting_vsm_in_defaultplugins):
+                logger.info(f':: INFO :: VSM to defaultplugins in {dpa_name}')
 
-    def enable_datamover(self, oadp_namespace, sceanrio ):
-        """
-        method enables dpa
-        1) enable restic secret via oc apply -f yaml
-        2) Set SC (in this case rbd per scenario details)
-        3) disabple restic plugin
-        4) Set SC
-        5) enable_vsm_plugin
-        6) patch dataprotectionapplication example-velero -n openshift-adp --type=json -p='[{"op": "replace", "path": "/spec/backupLocations/0/velero/config/s3Url", "value": "http://s3-openshift-storage.apps.cloud20.rdu2.scalelab.redhat.com"}]'
-        """
-        # 1) enable restic secret via oc apply -f yaml
-        cmd_create_restic_secret = self.__ssh.run(cmd=f"oc apply -f {self.__oadp_base_dir}/templates/restic_secret.yaml")
-        # 2) Set SC (in this case rbd per scenario details)
-        # 3) disabple restic plugin
-        json_query =  '{"spec": {"configuration": {"restic": {"enable": false}}}}'
-        disable_restic_plugin = self.__ssh.run(cmd=f"oc patch dpa example-velero --type merge -p '{json_query}'")
-        # 4) Set SC & relevant volumesnapshot class
-        # 5) Enable datamover
         json_query = '{"spec": {"features": {"dataMover": {"enable": true}}}}'
-        enable_vsm_plugin = self.__ssh.run(cmd=f"oc patch dpa example-velero --type merge -p '{json_query}'")
+        enable_dataMover = self.__ssh.run(cmd=f"oc patch dpa {dpa_name} -n {oadp_namespace} --type merge -p '{json_query}'")
+        if (enable_dataMover != '') and (not 'error' in enable_dataMover):
+            logger.info(f':: INFO :: Datamover is now enabled for {dpa_name}')
+        #kubectl patch dataprotectionapplication example-velero -n openshift-adp --type=json -p='[{"op": "add", "path": "/spec/configuration/velero/defaultPlugins/-", "value": "new_plugin"}]'
 
 
     @logger_time_stamp
@@ -1482,7 +1477,6 @@ class OadpWorkloads(WorkloadsOperations):
         """
         # Load Scenario Details
         test_scenario = self.load_test_scenario()
-
 
         # Get OADP, Velero, Storage Details
         self.oadp_get_version_info()
