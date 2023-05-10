@@ -36,10 +36,11 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        self.__oadp_scenario_name = 'backup-100pod-backup-vsm-pvc-util-4-1-0-cephrbd-6g' #self._environment_variables_dict.get('oadp_scenario','')
+        self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         # self.__oadp_scenario_name  = 'backup-csi-pvc-util-2-1-5-rbd-swift-1.5t' # backup-100pod-backup-vsm-pvc-util-4-1-0-cephrbd-6g' #self._environment_variables_dict.get('oadp_scenario', '')
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
+        self.__oadp_validation_mode = self._environment_variables_dict.get('validation_mode', 'light') # none - skips || light - % of randomly selected pods checked || full - every pod checked
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
@@ -324,6 +325,53 @@ class OadpWorkloads(WorkloadsOperations):
             else:
                 self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['status'] = False
 
+    def is_num_of_results_valid(self, expected_size, percentage_of_expected_size, list_of_values):
+        if len(list_of_values) == expected_size:
+            logger.info(f':: INFO :: {len(list_of_values)} matches total {expected_size}')
+            return True
+        elif percentage_of_expected_size[-1] == '%':
+            percentage = int(percentage_of_expected_size[:-1])
+            if len(list_of_values) >= (percentage / 100) * expected_size:
+                logger.info(f':: INFO ::  is_num_of_results_valid {len(list_of_values)} >= {percentage_of_expected_size} of {expected_size} which is {(percentage / 100) * expected_size}')
+                return True
+        return False
+
+    @logger_time_stamp
+    def waiting_for_ns_to_reach_desired_pods(self, scenario):
+        """
+        This method verifies number of pods in namespace are in running state
+        :return:
+        """
+        num_of_pods_expected = scenario['dataset']['pods_per_ns']
+        target_namespace = scenario['args']['namespaces_to_backup']
+        expected_size = scenario['dataset']['pv_size']
+        timeout_value = int(scenario['args']['testcase_timeout'])
+        try:
+            running_pods = self.get_list_of_pods_by_status(namespace=target_namespace, query_operator='=',status='Running')
+            logger.info(f':: INFO :: verify_running_pods: {target_namespace} has  {len(running_pods)} in running state, out of total desired: {num_of_pods_expected}')
+            if len(running_pods) == num_of_pods_expected:
+                return True
+            else:
+                pods_in_run_status_attempt_1 = self.get_list_of_pods_by_status(namespace=target_namespace,query_operator='=', status='Running')
+                logger.info(f':: INFO :: verify_running_pods shows the ns {target_namespace} has {len(running_pods)} - temporarily sleeping for 15 seconds to allow for additional time for pod generation')
+                time.sleep(15)
+                pods_in_run_status_attempt_2 = self.get_list_of_pods_by_status(namespace=target_namespace,query_operator='=', status='Running')
+                if len(pods_in_run_status_attempt_1) == len(pods_in_run_status_attempt_2):
+                    return False
+                current_wait_time = 0
+                while current_wait_time <= int(timeout_value):
+                    running_pods = self.get_list_of_pods_by_status(namespace=target_namespace, query_operator='=',status='Running')
+                    logger.info(f':: INFO :: verify_running_pods: {target_namespace} has  {len(running_pods)} in running state, out of total desired: {num_of_pods_expected}')
+                    if len(running_pods) == num_of_pods_expected:
+                        return True
+                    else:
+                        pods_not_yet_in_run_status = self.get_list_of_pods_by_status(namespace=target_namespace, query_operator='!=',status='Running')
+                        logger.info(f':: INFO :: verify_running_pods: {target_namespace} has  {len(running_pods)} in running state, waiting on {len(pods_not_yet_in_run_status)} out of total desired: {num_of_pods_expected}')
+                        time.sleep(3)
+                current_wait_time += 3
+        except Exception as err:
+            logger.warn(f'Error in waiting_for_ns_to_reach_desired_pods time out waiting to reach desired state so raised an exception')
+
     @logger_time_stamp
     def verify_running_pods(self, num_of_pods_expected, target_namespace):
         """
@@ -403,11 +451,14 @@ class OadpWorkloads(WorkloadsOperations):
         logger.info(f'{role} {num_of_assets_desired} {pv_size} {storage}')
         self.__ssh.run(
             cmd=f'{self.__oadp_path}/{role} {num_of_assets_desired} {pv_size} {storage} > /tmp/dataset-creation.log')
-        for i in range(1, num_of_assets_desired + 1):
-            print(f'checking for {target_namespace}-{i} in namespace= {target_namespace}')
-            self._oc.wait_for_pod_ready(pod_name=f'{target_namespace}-{i}', namespace=target_namespace)
         self.oadp_timer(action="stop", transaction_name='dataset_creation')
-
+        pods_ready = self.waiting_for_ns_to_reach_desired_pods(scenario=scenario)
+        if not pods_ready:
+            logger.error(
+                f"::: ERROR :: busybox_dataset_creation - expected pods running should be {num_of_assets_desired}")
+        else:
+            logger.info(
+                f"::: INFO :: busybox_dataset_creation - successfully created {num_of_assets_desired}")
 
     @logger_time_stamp
     def create_oadp_source_dataset(self, scenario):
@@ -508,7 +559,8 @@ class OadpWorkloads(WorkloadsOperations):
 
         # Verify pods in run state that are executing population on their pvs match expected numbers
         # Previous check was for execution of ansible this check is for the pods which are in run state
-        pods_ready_for_pv_util_validation = self.verify_running_pods(num_of_pods_expected=num_of_pods_expected, target_namespace=namespace)
+        #pods_ready_for_pv_util_validation = self.verify_running_pods(num_of_pods_expected=num_of_pods_expected, target_namespace=namespace)
+        pods_ready_for_pv_util_validation = self.waiting_for_ns_to_reach_desired_pods(scenario=test_scenario)
         if not pods_ready_for_pv_util_validation:
             logger.error(f"Number of created pods running: {len(created_pods)} expected pods running should be {num_of_pods_expected}")
         else:
@@ -870,6 +922,23 @@ class OadpWorkloads(WorkloadsOperations):
                                        patch_type='json',
                                        patch_json=query)
 
+    def is_datamover_enabled(self, oadp_namespace, scenario):
+        # Get DPA contents
+        dpa_data = self.get_oc_resource_to_json(resource_type='dpa', resource_name=self.__oadp_dpa,
+                                                namespace=oadp_namespace)
+        if bool(dpa_data) == False:
+            logger.error(':: ERROR :: DPA is not present command to get dpa as json resulted in empty dict')
+
+        dpa_name = dpa_data['metadata']['name']
+        velero_enabled_plugins = dpa_data['spec']['configuration']['velero']['defaultPlugins']
+        is_vsm_enabled = 'vsm' in velero_enabled_plugins
+        is_datamover_enabled = dpa_data['spec']['features']['dataMover']['enable']
+        if is_vsm_enabled and is_datamover_enabled:
+            return True
+        else:
+            return False
+
+
     def enable_datamover(self, oadp_namespace, scenario):
         """
         # can handle sc and vsc defaults before this invoked.
@@ -950,8 +1019,11 @@ class OadpWorkloads(WorkloadsOperations):
         """
         if sc == 'ocs-storagecluster-ceph-rbd':
             cmd_set_volume_snapshot_class = self.__ssh.run(cmd=f"oc apply -f {self.__oadp_base_dir}/vsc-cephRBD.yaml")
-        if sc == 'ocs-storagecluster-cephfs' or 'ocs-storagecluster-cephfs-shallow':
+            logger.info(f":: INFO :: RBD Attempting to set for {sc} vsc the output was {cmd_set_volume_snapshot_class} ")
+        if sc == 'ocs-storagecluster-cephfs' or sc == 'ocs-storagecluster-cephfs-shallow':
             cmd_set_volume_snapshot_class = self.__ssh.run(cmd=f"oc apply -f {self.__oadp_base_dir}/vsc-cephFS.yaml")
+            logger.info(f":: INFO :: CEPHFS Attempting to set for {sc} vsc the output was {cmd_set_volume_snapshot_class} ")
+        logger.info(f":: INFO :: Attempting to set for {sc} vsc the output was {cmd_set_volume_snapshot_class} ")
         expected_result_output = ['created', 'unchanged', 'configured']
         if any(ext in cmd_set_volume_snapshot_class for ext in expected_result_output) == False:
             print(f"Unable to set volume-snapshot-class {sc} ")
@@ -965,6 +1037,7 @@ class OadpWorkloads(WorkloadsOperations):
         current_sc = self.get_default_storage_class()
         if current_sc != sc:
             if current_sc == 'ocs-storagecluster-cephfs-shallow':
+                import packaging.version
                 current_oc_version = packaging.version.parse(self._oc.get_ocp_server_version())
                 minimal_supported_oc_version = packaging.version.parse('4.12.0')
                 if current_oc_version < minimal_supported_oc_version:
@@ -1115,7 +1188,7 @@ class OadpWorkloads(WorkloadsOperations):
                 del_cmd = self.__ssh.run(
                     cmd=f'oc -n {ns} exec deployment/velero -c velero -it -- ./velero {cr_type} delete {cr_name} --confirm')
                 if del_cmd != None and ('submitted successfully' in del_cmd or 'deleted' in del_cmd):
-                    logger.info("Error delete completed successfully")
+                    logger.info(f":: INFO :: OADP CR deleted by: velero {cr_type} delete {cr_name} completed successfully")
                 elif del_cmd != None and f"No {cr_type}s found" in del_cmd:
                     logger.info('CR not found so delete failed as it doesnt exist')
                 else:
@@ -1539,6 +1612,24 @@ class OadpWorkloads(WorkloadsOperations):
         test_data = yaml.safe_load(Path(self.__oadp_scenario_data).read_text())
         return (test_data['scenarios'][index])
 
+    def get_dataset_validation_mode(self, scenario):
+        """
+        method gets validation mode set from either yaml or cli
+        """
+        validation_set_by_yaml = scenario['dataset'].get('validation_mode', False)
+        validation_set_by_cli = self.__oadp_validation_mode
+        if validation_set_by_cli != False:
+            logger.info(f":: INFO :: Dataset Validation mode is set by CLI as  {validation_set_by_cli}")
+            return self.__oadp_validation_mode
+        if validation_set_by_yaml != False:
+            logger.info(f":: INFO :: Dataset Validation mode is set by yaml as  {validation_set_by_yaml}")
+            return validation_set_by_yaml
+        return 'full'
+
+
+
+
+
     @logger_time_stamp
     def validate_dataset(self, scenario):
         """
@@ -1551,29 +1642,71 @@ class OadpWorkloads(WorkloadsOperations):
         expected_sc = scenario['dataset']['sc']
         role = scenario['dataset']['role']
         skip_dataset_validation = scenario['args'].get('skip_source_dataset_check', False)
+        dataset_validation_mode = self.get_dataset_validation_mode(scenario)
+        timeout_value = scenario['args']['testcase_timeout']
 
         # all datasets are checked for if the pods are in the correct state with relevant pv in correct sc and pv size
         # datasets with role  generator require addition check of pv utilization in regards to utilized size, folders, and
 
-        pod_presence_and_storage_as_expected = self.verify_pod_presence_and_storage(num_of_pods_expected, target_namespace, expected_sc, expected_size, skip_dataset_validation)
-        if not pod_presence_and_storage_as_expected:
-            logger.warn(f'validate_dataset returning false for pod_presence_and_storage_as_expected: value is: {pod_presence_and_storage_as_expected}')
-            return False
-        elif role == 'generator':
+        if dataset_validation_mode == 'full':
+            pod_presence_and_storage_as_expected = self.verify_pod_presence_and_storage(num_of_pods_expected, target_namespace, expected_sc, expected_size, skip_dataset_validation)
+            if not pod_presence_and_storage_as_expected:
+                logger.warn(f'validate_dataset returning false for pod_presence_and_storage_as_expected: value is: {pod_presence_and_storage_as_expected}')
+                return False
+        if dataset_validation_mode == 'light':
+            pod_presence_and_storage_as_expected = self.waiting_for_ns_to_reach_desired_pods(scenario)
+            if not pod_presence_and_storage_as_expected:
+                logger.warn(f'validate_dataset returning false for pod_presence_and_storage_as_expected: value is: {pod_presence_and_storage_as_expected}')
+                return False
+        if dataset_validation_mode == 'none':
+            pod_presence_and_storage_as_expected = self.waiting_for_ns_to_reach_desired_pods(scenario)
+            logger.warn(f'validate_dataset is set to none -  NO validation will be performed')
+        # Validation for pods created with some data on them
+        if role == 'generator':
             # get list of running pods
-            pods_to_validate =  self.get_list_of_pods(namespace=target_namespace)
-            if pods_to_validate == 0:
+            all_pods = self.get_list_of_pods(namespace=target_namespace)
+            pods_to_validate = []
+            if dataset_validation_mode == 'none':
+                logger.warn(f'validate_dataset is set to none -  NO validation will be performed')
+                return True
+            if dataset_validation_mode == 'full':
+                pods_to_validate = all_pods
+            if dataset_validation_mode == 'light':
+                pods_to_validate = self.get_reduced_list(original_list=all_pods)
+                logger.info(
+                    f"*** INFO *** Validation Mode: light will validate 10% of randomly selected pods this requires {len(pods_to_validate)} of total {num_of_pods_expected}")
+            if len(pods_to_validate) == 0:
                 logger.error(f"No running pods were found in ns {target_namespace} expected {num_of_pods_expected}")
-            else:
-                for pod in pods_to_validate:
-                    pv_util_details_returned_by_pod = self.get_pod_pv_utilization_info_by_podname(scenario, pod)
-                    pv_contents_as_expected = self.pv_contains_expected_data(scenario, pv_util_details_returned_by_pod)
-                    if not pv_contents_as_expected:
-                        logger.warn(f'::: PV UTIL Contents check FAILURE:::  pv_contents_as_expected: value is: {pv_contents_as_expected} for pod: {pod} in ns {target_namespace} pod returned: {pv_util_details_returned_by_pod}')
-                        return False
-                    else:
-                        logger.info(f'::: PV UTIL Contents check successful for pod: {pod} in ns {target_namespace}')
+            for pod in pods_to_validate:
+                pv_util_details_returned_by_pod = self.get_pod_pv_utilization_info_by_podname(scenario, pod)
+                pv_contents_as_expected = self.pv_contains_expected_data(scenario, pv_util_details_returned_by_pod)
+                if not pv_contents_as_expected:
+                    logger.warn(
+                        f'::: PV UTIL Contents check FAILURE:::  pv_contents_as_expected: value is: {pv_contents_as_expected} for pod: {pod} in ns {target_namespace} pod returned: {pv_util_details_returned_by_pod}')
+                    return False
+                else:
+                    logger.info(f'::: PV UTIL Contents check successful for pod: {pod} in ns {target_namespace}')
         return True
+
+
+    def get_reduced_list(self, original_list):
+        import random
+        if not original_list:  # If the list is empty, return an empty list
+            return []
+
+        reduced_list_size = max(1, int(len(original_list) * 0.1))  # Calculate the size of the reduced list
+
+        if reduced_list_size >= len(
+                original_list):  # If the reduced list size is greater than or equal to the original list size, return the original list
+            return original_list
+
+        reduced_list_indexes = random.sample(range(len(original_list)),
+                                             reduced_list_size)  # Get random indexes for the reduced list
+
+        reduced_list = [original_list[i] for i in
+                        reduced_list_indexes]  # Create the reduced list from the original list using the random indexes
+
+        return reduced_list
 
     @logger_time_stamp
     def initialize_pod_resources_by_base_name(self, pod_name):
@@ -1611,6 +1744,7 @@ class OadpWorkloads(WorkloadsOperations):
         # Load Scenario Details
         test_scenario = self.load_test_scenario()
 
+
         # Get OADP, Velero, Storage Details
         self.oadp_get_version_info()
         self.get_velero_details()
@@ -1634,12 +1768,15 @@ class OadpWorkloads(WorkloadsOperations):
 
         # Setup Datamover if needed
         if test_scenario['args']['plugin'] == 'vsm':
-            self.enable_datamover(oadp_namespace='openshift-adp', scenario=test_scenario)
-            self.config_datamover(oadp_namespace='openshift-adp', scenario=test_scenario)
-            if expected_sc == 'ocs-storagecluster-cephfs-shallow':
-                self.config_dpa_for_cephfs_shallow(enable=True,oadp_namespace='openshift-adp')
+            if self.is_datamover_enabled(oadp_namespace='openshift-adp', scenario=test_scenario) == False:
+                self.enable_datamover(oadp_namespace='openshift-adp', scenario=test_scenario)
+                self.config_datamover(oadp_namespace='openshift-adp', scenario=test_scenario)
+                if expected_sc == 'ocs-storagecluster-cephfs-shallow':
+                    self.config_dpa_for_cephfs_shallow(enable=True,oadp_namespace='openshift-adp')
+                else:
+                    self.config_dpa_for_cephfs_shallow(enable=False,oadp_namespace='openshift-adp')
             else:
-                self.config_dpa_for_cephfs_shallow(enable=False,oadp_namespace='openshift-adp')
+                self.config_dpa_for_cephfs_shallow(enable=False, oadp_namespace='openshift-adp')
         else:
             # disable datamover / verify cephfs-shallow isnt set in dpa
             self.config_dpa_for_cephfs_shallow(enable=False,oadp_namespace='openshift-adp')
