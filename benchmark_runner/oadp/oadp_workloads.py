@@ -40,7 +40,7 @@ class OadpWorkloads(WorkloadsOperations):
         # self.__oadp_scenario_name  = 'backup-csi-pvc-util-2-1-5-rbd-swift-1.5t' # backup-100pod-backup-vsm-pvc-util-4-1-0-cephrbd-6g' #self._environment_variables_dict.get('oadp_scenario', '')
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
-        self.__oadp_validation_mode = self._environment_variables_dict.get('validation_mode', 'light') # none - skips || light - % of randomly selected pods checked || full - every pod checked
+        self.__oadp_validation_mode = self._environment_variables_dict.get('validation_mode', 'full') # none - skips || light - % of randomly selected pods checked || full - every pod checked
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
@@ -562,7 +562,7 @@ class OadpWorkloads(WorkloadsOperations):
         #pods_ready_for_pv_util_validation = self.verify_running_pods(num_of_pods_expected=num_of_pods_expected, target_namespace=namespace)
         pods_ready_for_pv_util_validation = self.waiting_for_ns_to_reach_desired_pods(scenario=test_scenario)
         if not pods_ready_for_pv_util_validation:
-            logger.error(f"Number of created pods running: {len(created_pods)} expected pods running should be {num_of_pods_expected}")
+            logger.error(f":: ERROR :: create_multi_pvutil_dataset: Inside waiting_for_ns_to_reach_desired_pods returned false since number of created pods not match expected pods that should be running totaling {num_of_pods_expected}")
         else:
             running_pods = self.get_list_of_pods(namespace=namespace)
             for pod in running_pods:
