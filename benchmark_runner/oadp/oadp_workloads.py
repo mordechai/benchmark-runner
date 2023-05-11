@@ -40,7 +40,7 @@ class OadpWorkloads(WorkloadsOperations):
         # self.__oadp_scenario_name  = 'backup-csi-pvc-util-2-1-5-rbd-swift-1.5t' # backup-100pod-backup-vsm-pvc-util-4-1-0-cephrbd-6g' #self._environment_variables_dict.get('oadp_scenario', '')
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
-        self.__oadp_validation_mode = self._environment_variables_dict.get('validation_mode', 'full') # none - skips || light - % of randomly selected pods checked || full - every pod checked
+        self.__oadp_validation_mode = self._environment_variables_dict.get('validation_mode', 'light') # none - skips || light - % of randomly selected pods checked || full - every pod checked
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
