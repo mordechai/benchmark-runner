@@ -348,12 +348,16 @@ class OadpWorkloads(WorkloadsOperations):
         timeout_value = int(scenario['args']['testcase_timeout'])
         try:
             running_pods = self.get_list_of_pods_by_status(namespace=target_namespace, query_operator='=',status='Running')
-            logger.info(f':: INFO :: verify_running_pods: {target_namespace} has  {len(running_pods)} in running state, out of total desired: {num_of_pods_expected}')
+            logger.info(f':: INFO :: waiting_for_ns_to_reach_desired_pods: {target_namespace} has  {len(running_pods)} in running state, out of total desired: {num_of_pods_expected}')
             if len(running_pods) == num_of_pods_expected:
                 return True
+            if len(running_pods) > num_of_pods_expected:
+                logger.warn(
+                    f':: WARN :: waiting_for_ns_to_reach_desired_pods: {target_namespace} has  {len(running_pods)} in running state which is more than total desired: {num_of_pods_expected} returning False')
+                return False
             else:
                 pods_in_run_status_attempt_1 = self.get_list_of_pods_by_status(namespace=target_namespace,query_operator='=', status='Running')
-                logger.info(f':: INFO :: verify_running_pods shows the ns {target_namespace} has {len(running_pods)} - temporarily sleeping for 15 seconds to allow for additional time for pod generation')
+                logger.info(f':: INFO :: waiting_for_ns_to_reach_desired_pods shows the ns {target_namespace} has {len(running_pods)} - temporarily sleeping for 15 seconds to allow for additional time for pod generation')
                 time.sleep(15)
                 pods_in_run_status_attempt_2 = self.get_list_of_pods_by_status(namespace=target_namespace,query_operator='=', status='Running')
                 if len(pods_in_run_status_attempt_1) == len(pods_in_run_status_attempt_2):
@@ -361,12 +365,12 @@ class OadpWorkloads(WorkloadsOperations):
                 current_wait_time = 0
                 while current_wait_time <= int(timeout_value):
                     running_pods = self.get_list_of_pods_by_status(namespace=target_namespace, query_operator='=',status='Running')
-                    logger.info(f':: INFO :: verify_running_pods: {target_namespace} has  {len(running_pods)} in running state, out of total desired: {num_of_pods_expected}')
+                    logger.info(f':: INFO :: waiting_for_ns_to_reach_desired_pods: {target_namespace} has  {len(running_pods)} in running state, out of total desired: {num_of_pods_expected}')
                     if len(running_pods) == num_of_pods_expected:
                         return True
                     else:
                         pods_not_yet_in_run_status = self.get_list_of_pods_by_status(namespace=target_namespace, query_operator='!=',status='Running')
-                        logger.info(f':: INFO :: verify_running_pods: {target_namespace} has  {len(running_pods)} in running state, waiting on {len(pods_not_yet_in_run_status)} out of total desired: {num_of_pods_expected}')
+                        logger.info(f':: INFO :: waiting_for_ns_to_reach_desired_pods: {target_namespace} has  {len(running_pods)} in running state, waiting on {len(pods_not_yet_in_run_status)} out of total desired: {num_of_pods_expected}')
                         time.sleep(3)
                 current_wait_time += 3
         except Exception as err:
