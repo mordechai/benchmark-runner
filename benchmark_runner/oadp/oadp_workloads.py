@@ -37,7 +37,6 @@ class OadpWorkloads(WorkloadsOperations):
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
         self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
-        # self.__oadp_scenario_name  = 'backup-csi-pvc-util-2-1-5-rbd-swift-1.5t' # backup-100pod-backup-vsm-pvc-util-4-1-0-cephrbd-6g' #self._environment_variables_dict.get('oadp_scenario', '')
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
         self.__oadp_validation_mode = self._environment_variables_dict.get('validation_mode', 'light') # none - skips || light - % of randomly selected pods checked || full - every pod checked
@@ -445,6 +444,8 @@ class OadpWorkloads(WorkloadsOperations):
     def busybox_dataset_creation(self, scenario):
         """
         method scales up single NS with busybox pods and oc assets
+        updated to allow for concurrent creation of 50 instances each creation 10 pods per busybox instance
+        if 50 instances reached then necessary to sleep 6 mins to allow for system to recover
         """
         num_of_assets_desired = scenario['dataset']['pods_per_ns']
         target_namespace = scenario['args']['namespaces_to_backup']
@@ -452,9 +453,26 @@ class OadpWorkloads(WorkloadsOperations):
         storage = scenario['dataset']['sc']
         role = scenario['dataset']['role']
         self.oadp_timer(action="start", transaction_name='dataset_creation')
-        logger.info(f'{role} {num_of_assets_desired} {pv_size} {storage}')
-        self.__ssh.run(
-            cmd=f'{self.__oadp_path}/{role} {num_of_assets_desired} {pv_size} {storage} > /tmp/dataset-creation.log')
+        start = 1
+        end = 10
+        count = 0
+
+        while start <= num_of_assets_desired:
+            if end > num_of_assets_desired:
+                end = num_of_assets_desired
+            logger.info(f":: INFO :: busybox_dataset_creation: executing {self.__oadp_path}/{role} {num_of_assets_desired} {pv_size} {storage} '' {start} {end} > /tmp/dataset-creation.log")
+            self.__ssh.run(cmd=f"{self.__oadp_path}/{role} {num_of_assets_desired} {pv_size} {storage} '' {start} {end} > /tmp/dataset-creation.log", background=True)
+
+            start += 10
+            end += 10
+            count += 1
+
+            if count % 50 == 0:
+                logger.info(
+                    f":: INFO :: busybox_dataset_creation: loop has executed 50 instances sleeping for 6 min executing {self.__oadp_path}/{role} {num_of_assets_desired} {pv_size} {storage} '' {start} {end} > /tmp/dataset-creation.log")
+                time.sleep(60*6)
+        logger.info(f":: INFO :: busybox_dataset_creation: loop has executed 10 times now sleeping for 1 min executing {self.__oadp_path}/{role} {num_of_assets_desired} {pv_size} {storage} '' {start} {end} > /tmp/dataset-creation.log")
+        time.sleep(60)
         self.oadp_timer(action="stop", transaction_name='dataset_creation')
         pods_ready = self.waiting_for_ns_to_reach_desired_pods(scenario=scenario)
         if not pods_ready:
