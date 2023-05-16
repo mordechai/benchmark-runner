@@ -356,8 +356,8 @@ class OadpWorkloads(WorkloadsOperations):
                 return False
             else:
                 pods_in_run_status_attempt_1 = self.get_list_of_pods_by_status(namespace=target_namespace,query_operator='=', status='Running')
-                logger.info(f':: INFO :: waiting_for_ns_to_reach_desired_pods shows the ns {target_namespace} has {len(running_pods)} - temporarily sleeping for 15 seconds to allow for additional time for pod generation')
-                time.sleep(15)
+                logger.info(f':: INFO :: waiting_for_ns_to_reach_desired_pods shows the ns {target_namespace} has {len(running_pods)} - temporarily sleeping for 65 seconds to allow for additional time for pod generation')
+                time.sleep(65)
                 pods_in_run_status_attempt_2 = self.get_list_of_pods_by_status(namespace=target_namespace,query_operator='=', status='Running')
                 if len(pods_in_run_status_attempt_1) == len(pods_in_run_status_attempt_2):
                     return False
