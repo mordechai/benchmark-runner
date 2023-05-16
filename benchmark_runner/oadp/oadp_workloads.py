@@ -486,7 +486,7 @@ class OadpWorkloads(WorkloadsOperations):
         #         logger.exception("Unable to remove NS {ns} when attempting to clean up before populating NS likely same ns exists on different storage")
         if role == 'BusyBoxPodSingleNS.sh':
             self.busybox_dataset_creation(scenario)
-        if role == 'generator':
+        if role == 'generator' or role == 'dd_generator':
             self.create_multi_pvutil_dataset(scenario)
 
 
