@@ -41,6 +41,10 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
         self.__oadp_validation_mode = self._environment_variables_dict.get('validation_mode', 'light') # none - skips || light - % of randomly selected pods checked || full - every pod checked
+        self.__retry_logic = {
+            'interval_between_checks=': 15,
+             'max_attempts': 20
+        }
         self.__result_report = '/tmp/oadp-report.json'
         self.__artifactdir = os.path.join(self._run_artifacts_path, 'oadp-ci')
         self._run_artifacts_path = self._environment_variables_dict.get('run_artifacts_path', '')
@@ -336,6 +340,66 @@ class OadpWorkloads(WorkloadsOperations):
                 return True
         return False
 
+    def compare_dicts(self, dict1, dict2):
+        if set(dict1.keys()) != set(dict2.keys()):
+            return False
+
+        for key in dict1:
+            if dict1[key] != dict2[key]:
+                return False
+
+        return True
+
+    def get_status_of_pods_by_ns(self, scenario):
+        """ method creates dict summary of  pods by status """
+        target_namespace = scenario['args']['namespaces_to_backup']
+        ns_state = {}
+        for state in ['Running', 'Completed', 'CrashLoopBackOff', 'Error', 'Pending', 'ContainerCreating',
+                      'Terminating', 'ImagePullBackOff', 'Init', 'Unknown']:
+            ns_state[f'{state}'] = len(
+                self.get_list_of_pods_by_status(namespace=target_namespace, query_operator='=', status=state))
+        logger.info(f':: INFO :: get_status_of_pods_by_ns shows that ns {target_namespace} has {ns_state}')
+        return ns_state
+
+    @logger_time_stamp
+    def verify_pods_are_progressing(self, scenario, interval_between_checks=15, max_attempts=1):
+        """
+        method captures pods status
+        """
+        num_of_pods_expected = scenario['dataset']['pods_per_ns']
+        target_namespace = scenario['args']['namespaces_to_backup']
+        expected_size = scenario['dataset']['pv_size']
+        timeout_value = int(scenario['args']['testcase_timeout'])
+        try:
+            running_pods = self.get_list_of_pods_by_status(namespace=target_namespace, query_operator='=',status='Running')
+            if len(running_pods) == num_of_pods_expected:
+                return True
+            else:
+                total_attempts = 0
+                while total_attempts < max_attempts:
+                    status_of_pods = self.get_status_of_pods_by_ns(scenario)
+                    logger.info(f":: INFO :: verify_pods_are_progressing: pausing for {interval_between_checks} ")
+                    time.sleep(int(interval_between_checks))
+                    current_status_of_pods = self.get_status_of_pods_by_ns(scenario)
+                    are_status_of_pods_the_same = self.compare_dicts(status_of_pods, current_status_of_pods)
+                    number_of_running_pods_increased = current_status_of_pods['Running'] > status_of_pods['Running']
+                    total_pods_in_run_state_divisble_by_500 = (current_status_of_pods['Running'] % 500 == 0)
+
+                    if (not are_status_of_pods_the_same and number_of_running_pods_increased):
+                        logger.info(f":: INFO :: verify_pods_are_progressing: pods states are progressing number of runniing pods previously: { status_of_pods['Running']} currently: {current_status_of_pods['Running']}  ")
+                        return True
+                    # current_status_of_pods['Running'] modulus 500 && current_status_of_pods['Pending'] == 0 and current_status_of_pods['Error'] == 0 and number_of_running_pods_increased == False and are_status_of_pods_the_same == True
+                    if (total_pods_in_run_state_divisble_by_500 and  current_status_of_pods['Pending'] == 0 and current_status_of_pods['Error'] == 0 and number_of_running_pods_increased == False and are_status_of_pods_the_same == True):
+                        logger.info(f":: INFO :: verify_pods_are_progressing: batch is likely complete so progression has stopped returning False to load next batch ")
+                        return False
+                    else:
+                        logger.info(f":: INFO :: verify_pods_are_progressing: pods states are NOT progressing number of runniing pods previously: {status_of_pods} currently: {current_status_of_pods}  ")
+                    total_attempts += 1
+                logger.info(f":: INFO :: verify_pods_are_progressing: pods states are NOT progressing number of runniing pods previously: {status_of_pods} currently: {current_status_of_pods} ")
+                return False
+        except Exception as err:
+            logger.warn(f':: WARN :: in verify_pods_are_progressing  raised an exception {err}')
+
     @logger_time_stamp
     def waiting_for_ns_to_reach_desired_pods(self, scenario):
         """
@@ -349,30 +413,29 @@ class OadpWorkloads(WorkloadsOperations):
         try:
             running_pods = self.get_list_of_pods_by_status(namespace=target_namespace, query_operator='=',status='Running')
             logger.info(f':: INFO :: waiting_for_ns_to_reach_desired_pods: {target_namespace} has  {len(running_pods)} in running state, out of total desired: {num_of_pods_expected}')
+
             if len(running_pods) == num_of_pods_expected:
                 return True
             if len(running_pods) > num_of_pods_expected:
                 logger.warn(
-                    f':: WARN :: waiting_for_ns_to_reach_desired_pods: {target_namespace} has  {len(running_pods)} in running state which is more than total desired: {num_of_pods_expected} returning False')
+                    f':: WARN :: waiting_for_ns_to_reach_desired_pods: {target_namespace} has  {len(running_pods)} in running state which is MORE than total desired: {num_of_pods_expected} please check your namespace usage between tests this method is returning False')
                 return False
             else:
-                pods_in_run_status_attempt_1 = self.get_list_of_pods_by_status(namespace=target_namespace,query_operator='=', status='Running')
-                logger.info(f':: INFO :: waiting_for_ns_to_reach_desired_pods shows the ns {target_namespace} has {len(running_pods)} - temporarily sleeping for 65 seconds to allow for additional time for pod generation')
-                time.sleep(65)
-                pods_in_run_status_attempt_2 = self.get_list_of_pods_by_status(namespace=target_namespace,query_operator='=', status='Running')
-                if len(pods_in_run_status_attempt_1) == len(pods_in_run_status_attempt_2):
+                pods_progressing = self.verify_pods_are_progressing(scenario=scenario, interval_between_checks=self.__retry_logic['interval_between_checks'], max_attempts=self.__retry_logic['max_attempts'])
+                if not pods_progressing:
                     return False
-                current_wait_time = 0
-                while current_wait_time <= int(timeout_value):
-                    running_pods = self.get_list_of_pods_by_status(namespace=target_namespace, query_operator='=',status='Running')
-                    logger.info(f':: INFO :: waiting_for_ns_to_reach_desired_pods: {target_namespace} has  {len(running_pods)} in running state, out of total desired: {num_of_pods_expected}')
-                    if len(running_pods) == num_of_pods_expected:
-                        return True
-                    else:
-                        pods_not_yet_in_run_status = self.get_list_of_pods_by_status(namespace=target_namespace, query_operator='!=',status='Running')
-                        logger.info(f':: INFO :: waiting_for_ns_to_reach_desired_pods: {target_namespace} has  {len(running_pods)} in running state, waiting on {len(pods_not_yet_in_run_status)} out of total desired: {num_of_pods_expected}')
-                        time.sleep(3)
-                current_wait_time += 3
+                else:
+                    current_wait_time = 0
+                    while current_wait_time <= int(timeout_value):
+                        running_pods = self.get_list_of_pods_by_status(namespace=target_namespace, query_operator='=',status='Running')
+                        logger.info(f':: INFO :: waiting_for_ns_to_reach_desired_pods: {target_namespace} has  {len(running_pods)} in running state, out of total desired: {num_of_pods_expected}')
+                        if len(running_pods) == num_of_pods_expected:
+                            return True
+                        else:
+                            pods_not_yet_in_run_status = self.get_list_of_pods_by_status(namespace=target_namespace, query_operator='!=',status='Running')
+                            logger.info(f':: INFO :: waiting_for_ns_to_reach_desired_pods: {target_namespace} has  {len(running_pods)} in running state, waiting on {len(pods_not_yet_in_run_status)} out of total desired: {num_of_pods_expected}')
+                            time.sleep(3)
+                    current_wait_time += 3
         except Exception as err:
             logger.warn(f'Error in waiting_for_ns_to_reach_desired_pods time out waiting to reach desired state so raised an exception')
 
@@ -453,6 +516,7 @@ class OadpWorkloads(WorkloadsOperations):
         pv_size =  scenario['dataset']['pv_size']
         storage = scenario['dataset']['sc']
         role = scenario['dataset']['role']
+        dataset_creation_log = os.path.join(self._run_artifacts_path, 'dataset_creation.log')
         self.oadp_timer(action="start", transaction_name='dataset_creation')
         start = 1
         end = 10
@@ -461,8 +525,8 @@ class OadpWorkloads(WorkloadsOperations):
         while start <= num_of_assets_desired:
             if end > num_of_assets_desired:
                 end = num_of_assets_desired
-            logger.info(f":: INFO :: busybox_dataset_creation: executing {self.__oadp_path}/{role} {num_of_assets_desired} {pv_size} {storage} '' {start} {end} > /tmp/dataset-creation.log")
-            self.__ssh.run(cmd=f"{self.__oadp_path}/{role} {num_of_assets_desired} {pv_size} {storage} '' {start} {end} > /tmp/dataset-creation.log", background=True)
+            logger.info(f":: INFO :: busybox_dataset_creation: executing {self.__oadp_path}/{role} {num_of_assets_desired} {pv_size} {storage} '' {start} {end} >> {dataset_creation_log}")
+            self.__ssh.run(cmd=f"{self.__oadp_path}/{role} {num_of_assets_desired} {pv_size} {storage} '' {start} {end} >> {dataset_creation_log}", background=True)
 
             start += 10
             end += 10
@@ -470,10 +534,12 @@ class OadpWorkloads(WorkloadsOperations):
 
             if count % 50 == 0:
                 logger.info(
-                    f":: INFO :: busybox_dataset_creation: loop has executed 50 instances sleeping for 6 min executing {self.__oadp_path}/{role} {num_of_assets_desired} {pv_size} {storage} '' {start} {end} > /tmp/dataset-creation.log")
-                time.sleep(60*6)
-        logger.info(f":: INFO :: busybox_dataset_creation: loop has executed 10 times now sleeping for 1 min executing {self.__oadp_path}/{role} {num_of_assets_desired} {pv_size} {storage} '' {start} {end} > /tmp/dataset-creation.log")
-        time.sleep(60)
+                    f":: INFO :: busybox_dataset_creation: loop has executed 50 instances sleeping for 6 min executing {self.__oadp_path}/{role} {num_of_assets_desired} {pv_size} {storage} '' {start} {end}  >> {dataset_creation_log}")
+                pods_progressing = True
+                while pods_progressing:
+                    pods_progressing = self.verify_pods_are_progressing(scenario=scenario,interval_between_checks=self.__retry_logic['interval_between_checks'], max_attempts=self.__retry_logic['max_attempts'])
+                    logger.info(f":: INFO :: busybox_dataset_creation: pods are no longer progressing next batch can start if appplicable")
+        logger.info(f":: INFO :: busybox_dataset_creation: loop has executed 10 times now sleeping for 1 min executing {self.__oadp_path}/{role} {num_of_assets_desired} {pv_size} {storage} '' {start} {end}  >> {dataset_creation_log}")
         self.oadp_timer(action="stop", transaction_name='dataset_creation')
         pods_ready = self.waiting_for_ns_to_reach_desired_pods(scenario=scenario)
         if not pods_ready:
@@ -494,6 +560,11 @@ class OadpWorkloads(WorkloadsOperations):
         pv_size = scenario['dataset']['pv_size']
         storage = scenario['dataset']['sc']
         role = scenario['dataset']['role']
+        # setting retry logic from dataset creation
+        self.__retry_logic = {
+            'interval_between_checks': 15,
+            'max_attempts': 20
+        }
         #
         # # check whether current NS already exists
         # check_ns_presence = self.__ssh.run(cmd=f'oc get ns {target_namespace}')
@@ -1826,8 +1897,17 @@ class OadpWorkloads(WorkloadsOperations):
         # when performing backup
         # Check if source namespace aka our dataset is preseent, if dataset not prsent then create it
         if test_scenario['args']['OADP_CR_TYPE'] == 'backup':
+            # setting retry logic for initial dataset presence check to be quick
+            self.__retry_logic = {
+                'interval_between_checks': 15,
+                'max_attempts': 1
+            }
             dataset_already_present = self.validate_dataset(test_scenario)
             if not dataset_already_present:
+                self.__retry_logic = {
+                    'interval_between_checks': 15,
+                    'max_attempts': 28
+                }
                 self.create_oadp_source_dataset(test_scenario)
 
         # when performing restore
