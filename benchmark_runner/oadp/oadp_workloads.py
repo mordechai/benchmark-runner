@@ -36,6 +36,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
+        # self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-100-pods-rbd'
         self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
@@ -955,7 +956,7 @@ class OadpWorkloads(WorkloadsOperations):
         velero_enabled_plugins = dpa_data['spec']['configuration']['velero']['defaultPlugins']
         is_vsm_enabled = 'vsm' in velero_enabled_plugins
         is_datamover_enabled = dpa_data['spec']['features']['dataMover']['enable']
-        if is_vsm_enabled and is_datamover_enabled:
+        if is_vsm_enabled or is_datamover_enabled:
             return True
         else:
             return False
@@ -1029,10 +1030,28 @@ class OadpWorkloads(WorkloadsOperations):
         """
         method disables datamover from dpa
         """
-        query = '{"spec": {"features": {"dataMover": {"enable": false}}}}'
-        self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
-                               patch_type='merge',
-                               patch_json=query)
+        # Get DPA contents
+        dpa_data = self.get_oc_resource_to_json(resource_type='dpa', resource_name=self.__oadp_dpa,
+                                                namespace=oadp_namespace)
+        if bool(dpa_data) == False:
+            logger.error(':: ERROR :: DPA is not present command to get dpa as json resulted in empty dict')
+
+        dpa_name = dpa_data['metadata']['name']
+        velero_enabled_plugins = dpa_data['spec']['configuration']['velero']['defaultPlugins']
+        is_vsm_enabled = 'vsm' in velero_enabled_plugins
+        is_datamover_enabled = dpa_data['spec']['features']['dataMover']['enable']
+        if is_datamover_enabled:
+            query = '{"spec": {"features": {"dataMover": {"enable": false}}}}'
+            self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
+                                   patch_type='merge',
+                                   patch_json=query)
+        if 'vsm' in velero_enabled_plugins:
+            logger.info(f":: INFO :: Current plugins that are enabled are: {velero_enabled_plugins}")
+            for i in range(len(dpa_data['spec']['configuration']['velero']['defaultPlugins'])):
+                if dpa_data['spec']['configuration']['velero']['defaultPlugins'][i] == 'vsm':
+                    query = '[{"op":"remove", "path": "/spec/configuration/velero/defaultPlugins/' + f'{i}' + '"}]'
+                    remove_vsm = self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace, patch_type='json', patch_json=query)
+                    logger.info (f":: INFO :: Currently defaultPlugins are: {dpa_data['spec']['configuration']['velero']['defaultPlugins']} ")
 
     @logger_time_stamp
     def set_volume_snapshot_class(self, sc):
