@@ -36,7 +36,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-100-pods-rbd'
+        # self.__oadp_scenario_name = 'sanity-100pod-backup-csi-pvc-util-6-6-6-rbd-6g'
         self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
@@ -483,6 +483,21 @@ class OadpWorkloads(WorkloadsOperations):
             if del_ns_cmd.find('deleted') < 0:
                 print(f"attempt to delete namespace {n} failed")
         self.oadp_timer(action="stop", transaction_name='delete_oadp_source_dataset')
+        # poll for dataset presence
+        try:
+            time_spent_waiting_for_deletion = 0
+            while (time_spent_waiting_for_deletion < 900):
+                ns_data = self.get_oc_resource_to_json(resource_type='ns', resource_name=target_namespace,namespace=default)
+                if bool(ns_data) == False:
+                    logger.info(f':: info :: NS {target_namespace} deletion is completed')
+                    return True
+                else:
+                    logger.info(f':: info :: NS {target_namespace} deletion so far taken: {time_spent_waiting_for_deletion} of 900s allocated deletion ns resource shows: {ns_data}')
+                    time.sleep(2)
+                    time_spent_waiting_for_deletion += 2
+        except Exception as err:
+            logger.warn(f':: WARN :: in delete_oadp_source_dataset  raised an exception related to {cr_name} deletion attempt {err}')
+
 
     @logger_time_stamp
     def  verify_pod_presence_and_storage(self, num_of_pods_expected, target_namespace, expected_sc, expected_size, skip_dataset_validation):
@@ -590,12 +605,12 @@ class OadpWorkloads(WorkloadsOperations):
             current_wait_time = 0
             while current_wait_time <= int(timeout_value):
                 status_cmd = self.__ssh.run(cmd=f"oc  exec -n{namespace} {pod_name} -- /bin/bash -c 'pgrep -flc {process_text_to_monitor}'")
-                status_cmd = status_cmd.split('\n')[0]
+                status_cmd_value = status_cmd.split('\n')[0]
                 if int(status_cmd) == 0:
-                    logger.info('process not found in container')
+                    logger.info(':: INFO :: wait_until_process_inside_pod_completes: population related process is no longer found in container')
                     return True
                 else:
-                    logger.info('process is still running in container')
+                    logger.info(':: INFO :: wait_until_process_inside_pod_completes: population process is STILL running in container')
                     time.sleep(3)
             current_wait_time += 3
         except Exception as err:
@@ -951,10 +966,19 @@ class OadpWorkloads(WorkloadsOperations):
                                    patch_type='merge',
                                    patch_json=query)
         if not enable:
-            query = '[{"op":"remove", "path": "/spec/features/dataMover/volumeOptions"}]'
-            self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
-                                   patch_type='json',
-                                   patch_json=query)
+            dpa_data = self.get_oc_resource_to_json(resource_type='dpa', resource_name=self.__oadp_dpa,
+                                                    namespace=oadp_namespace)
+            if bool(dpa_data) == False:
+                logger.error(':: ERROR :: DPA is not present command to get dpa as json resulted in empty dict')
+
+            if dpa_data['spec'].get('Features', False) != False:
+                logger.info(':: INFO :: DPA has spec/features will remove volumeoptions if present')
+                query = '[{"op":"remove", "path": "/spec/features/dataMover/volumeOptions"}]'
+                self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
+                                       patch_type='json',
+                                       patch_json=query)
+            else:
+                logger.info(':: INFO :: DPA has NO spec/features so no volumeoptions to remove')
 
 
     def config_datamover(self, oadp_namespace, scenario):
@@ -1026,7 +1050,10 @@ class OadpWorkloads(WorkloadsOperations):
         dpa_name = dpa_data['metadata']['name']
         velero_enabled_plugins = dpa_data['spec']['configuration']['velero']['defaultPlugins']
         is_vsm_enabled = 'vsm' in velero_enabled_plugins
-        is_datamover_enabled = dpa_data['spec']['features']['dataMover']['enable']
+        if dpa_data['spec'].get('Features', False) != False:
+            is_datamover_enabled = dpa_data['spec']['features']['dataMover']['enable']
+        else:
+            is_datamover_enabled = False
         if is_vsm_enabled or is_datamover_enabled:
             return True
         else:
@@ -1110,7 +1137,10 @@ class OadpWorkloads(WorkloadsOperations):
         dpa_name = dpa_data['metadata']['name']
         velero_enabled_plugins = dpa_data['spec']['configuration']['velero']['defaultPlugins']
         is_vsm_enabled = 'vsm' in velero_enabled_plugins
-        is_datamover_enabled = dpa_data['spec']['features']['dataMover']['enable']
+        if dpa_data['spec'].get('Features', False) != False:
+            is_datamover_enabled = dpa_data['spec']['features']['dataMover']['enable']
+        else:
+            is_datamover_enabled = False
         if is_datamover_enabled:
             query = '{"spec": {"features": {"dataMover": {"enable": false}}}}'
             self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
@@ -1306,6 +1336,32 @@ class OadpWorkloads(WorkloadsOperations):
                 else:
                     logger.info(f"=== Attempt to delete was not successful the output was: {del_cmd}")
         self.oadp_timer(action="stop", transaction_name='Delete existing OADP CR')
+        # poll for deletion
+        try:
+            is_cr_present = self.is_oadp_cr_present(ns=ns, cr_type=cr_type, cr_name=cr_name)
+            if is_cr_present:
+                time_spent_waiting_for_deletion = 0
+                while (time_spent_waiting_for_deletion < 900):
+                    is_cr_present = self.is_oadp_cr_present(ns=ns, cr_type=cr_type, cr_name=cr_name)
+                    if is_cr_present:
+                        cr_data = self.get_oc_resource_to_json(resource_type=ns, resource_name=target_namespace,
+                                                               namespace=default)
+                        if bool(cr_data) == False:
+                            logger.info(f':: info :: delete_oadp_custom_resources {cr_name} in {target_namespace} deletion is completed')
+                            return True
+                        else:
+                            logger.info(
+                                f':: info ::delete_oadp_custom_resources {cr_name} deletion so far taken: {time_spent_waiting_for_deletion} of 900s allocated deletion ns resource shows: {cr_data}')
+                        logger.info(f":: INFO :: delete_oadp_custom_resources issued deletion of {cr_name} which is a {cr_type} curretly waitng on this CR to be removed")
+                        time.sleep(2)
+                        time_spent_waiting_for_deletion += 2
+                    else:
+                        logger.info(f'::INFO:: {cr_name} no longer found delete has completed successfully')
+                        return True
+            else:
+                logger.info(f'::INFO:: {cr_name} no longer found delete has completed successfully')
+        except Exception as err:
+            logger.warn(f':: WARN :: in delete_oadp_custom_resources  raised an exception related to {cr_name} deletion attempt {err}')
 
     @logger_time_stamp
     def find_test_scenario_index(self, scenario_name):
@@ -1892,7 +1948,8 @@ class OadpWorkloads(WorkloadsOperations):
         else:
             # disable datamover / verify cephfs-shallow isnt set in dpa
             self.config_dpa_for_cephfs_shallow(enable=False,oadp_namespace='openshift-adp')
-            self.disable_datamover(oadp_namespace='openshift-adp')
+            if self.is_datamover_enabled(oadp_namespace='openshift-adp', scenario=test_scenario) == True:
+                self.disable_datamover(oadp_namespace='openshift-adp')
 
         # when performing backup
         # Check if source namespace aka our dataset is preseent, if dataset not prsent then create it
