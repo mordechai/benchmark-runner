@@ -36,8 +36,8 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'sanity-100pod-backup-csi-pvc-util-6-6-6-rbd-6g'
-        self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
+        self.__oadp_scenario_name = '30pod-restore-vsm-pvc-util-minio-6g'
+        # self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
         self.__oadp_validation_mode = self._environment_variables_dict.get('validation_mode', 'light') # none - skips || light - % of randomly selected pods checked || full - every pod checked
@@ -487,7 +487,7 @@ class OadpWorkloads(WorkloadsOperations):
         try:
             time_spent_waiting_for_deletion = 0
             while (time_spent_waiting_for_deletion < 900):
-                ns_data = self.get_oc_resource_to_json(resource_type='ns', resource_name=target_namespace,namespace=default)
+                ns_data = self.get_oc_resource_to_json(resource_type='ns', resource_name=target_namespace,namespace='openshift-adp')
                 if bool(ns_data) == False:
                     logger.info(f':: info :: NS {target_namespace} deletion is completed')
                     return True
@@ -888,7 +888,7 @@ class OadpWorkloads(WorkloadsOperations):
             if backup_cmd.find('submitted successfully') == 0:
                 print("Error backup attempt failed !!! ")
                 logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
-        if plugin == 'csi':
+        if plugin == 'csi' or plugin == 'vsm':
             backup_cmd = self.__ssh.run(
                 cmd=f'oc -n openshift-adp exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup}')
             if backup_cmd.find('submitted successfully') == 0:
@@ -966,8 +966,7 @@ class OadpWorkloads(WorkloadsOperations):
                                    patch_type='merge',
                                    patch_json=query)
         if not enable:
-            dpa_data = self.get_oc_resource_to_json(resource_type='dpa', resource_name=self.__oadp_dpa,
-                                                    namespace=oadp_namespace)
+            dpa_data = self.get_oc_resource_to_json(resource_type='dpa', resource_name=self.__oadp_dpa, namespace=oadp_namespace)
             if bool(dpa_data) == False:
                 logger.error(':: ERROR :: DPA is not present command to get dpa as json resulted in empty dict')
 
@@ -1609,8 +1608,9 @@ class OadpWorkloads(WorkloadsOperations):
         """
         method returns oc resource info
         """
+        logger.info(f":: INFO :: Attempting  oc get {resource_type} {resource_name} -n {namespace} ")
         resources_returned = self.__ssh.run(cmd=f'oc get {resource_type} {resource_name} -n {namespace} -o json')
-        if 'not found' in resources_returned:
+        if 'Error from server' in resources_returned:
             logger.info(f"::info:: oc get {resource_type} {resource_name} -n {namespace} => Not Found")
             return {}
         else:
@@ -2067,7 +2067,7 @@ class OadpWorkloads(WorkloadsOperations):
         method creates elastic index name based on test_scenario data
         '''
         if scenario['dataset']['total_namespaces'] == 1:
-            index_name = 'oadp-' + scenario['testtype'] + '-' + 'single-namespace'
+            index_name = 'oadp-' + scenario['testtype'] + '-' + 'single-namespace-updated'
         elif scenario['dataset']['total_namespaces'] > 1:
                 index_name = 'oadp-' + scenario['testtype'] + '-' + 'multi-namespace'
         logger.info(f'index_name {index_name}')
