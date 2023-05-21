@@ -373,7 +373,7 @@ class OadpWorkloads(WorkloadsOperations):
         try:
             running_pods = self.get_list_of_pods_by_status(namespace=target_namespace, query_operator='=',status='Running')
             if len(running_pods) == num_of_pods_expected:
-                return True
+                return False
             else:
                 total_attempts = 0
                 while total_attempts < max_attempts:
