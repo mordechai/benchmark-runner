@@ -36,8 +36,8 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        self.__oadp_scenario_name = '30pod-restore-vsm-pvc-util-minio-6g'
-        # self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
+        # self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-100-pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
+        self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
         self.__oadp_validation_mode = self._environment_variables_dict.get('validation_mode', 'light') # none - skips || light - % of randomly selected pods checked || full - every pod checked
@@ -1154,7 +1154,7 @@ class OadpWorkloads(WorkloadsOperations):
                     logger.info (f":: INFO :: Currently defaultPlugins are: {dpa_data['spec']['configuration']['velero']['defaultPlugins']} ")
 
     @logger_time_stamp
-    def set_volume_snapshot_class(self, sc):
+    def set_volume_snapshot_class(self, sc, scenario):
         """
         Sets volume snapshot class per storage
         """
@@ -1169,6 +1169,14 @@ class OadpWorkloads(WorkloadsOperations):
         if any(ext in cmd_set_volume_snapshot_class for ext in expected_result_output) == False:
             print(f"Unable to set volume-snapshot-class {sc} ")
             logger.exception(f"Unable to set volume-snapshot-class {sc}")
+        if scenario['args']['plugin'] == 'vsm':
+            query = '{"deletionPolicy": "Retain"}'
+            logger.info(f"::INFO:: Attempting to set deletion policy of scale-volumesnapshotclass to {query}")
+            self.patch_oc_resource(resource_type='volumesnapshotclass', resource_name='scale-volumesnapshotclass', namespace='openshift-adp',patch_type='merge',patch_json=query)
+        else:
+            query = '{"deletionPolicy": "Delete"}'
+            logger.info(f"::INFO:: Attempting to set deletion policy of scale-volumesnapshotclass to {query}")
+            self.patch_oc_resource(resource_type='volumesnapshotclass', resource_name='scale-volumesnapshotclass',namespace='openshift-adp', patch_type='merge', patch_json=query)
 
     @logger_time_stamp
     def set_default_storage_class(self,sc):
@@ -1932,7 +1940,7 @@ class OadpWorkloads(WorkloadsOperations):
 
         # Setup Default SC and Volume Snapshot Class
         self.set_default_storage_class(expected_sc)
-        self.set_volume_snapshot_class(expected_sc)
+        self.set_volume_snapshot_class(expected_sc,test_scenario)
 
         # Setup Datamover if needed
         if test_scenario['args']['plugin'] == 'vsm':
@@ -2067,7 +2075,7 @@ class OadpWorkloads(WorkloadsOperations):
         method creates elastic index name based on test_scenario data
         '''
         if scenario['dataset']['total_namespaces'] == 1:
-            index_name = 'oadp-' + scenario['testtype'] + '-' + 'single-namespace-updated'
+            index_name = 'oadp-' + scenario['testtype'] + '-' + 'single-namespace'
         elif scenario['dataset']['total_namespaces'] > 1:
                 index_name = 'oadp-' + scenario['testtype'] + '-' + 'multi-namespace'
         logger.info(f'index_name {index_name}')
