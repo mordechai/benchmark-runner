@@ -1351,10 +1351,9 @@ class OadpWorkloads(WorkloadsOperations):
                 while (time_spent_waiting_for_deletion < 900):
                     is_cr_present = self.is_oadp_cr_present(ns=ns, cr_type=cr_type, cr_name=cr_name)
                     if is_cr_present:
-                        cr_data = self.get_oc_resource_to_json(resource_type=ns, resource_name=target_namespace,
-                                                               namespace=default)
+                        cr_data = self.get_oc_resource_to_json(resource_type=ns, resource_name=target_namespace,namespace=default)
                         if bool(cr_data) == False:
-                            logger.info(f':: info :: delete_oadp_custom_resources {cr_name} in {target_namespace} deletion is completed')
+                            logger.info(f':: info :: delete_oadp_custom_resources {cr_name} in {ns} deletion is completed')
                             return True
                         else:
                             logger.info(
@@ -1991,8 +1990,7 @@ class OadpWorkloads(WorkloadsOperations):
                                                           cr_name=test_scenario['args']['OADP_CR_NAME'])
         if oadp_cr_already_present:
             logger.warn(f"You are attempting to use CR name: {test_scenario['args']['OADP_CR_NAME']} which is already present so it will be deleted")
-            self.delete_oadp_custom_resources(cr_type=test_scenario['args']['OADP_CR_TYPE'], ns='openshift-adp',
-                                              cr_name=test_scenario['args']['OADP_CR_NAME'])
+            self.delete_oadp_custom_resources(ns='openshift-adp', cr_type=test_scenario['args']['OADP_CR_TYPE'], cr_name=test_scenario['args']['OADP_CR_NAME'])
 
         # Get Node and Pod Resource prior to test
         self.collect_all_node_resource()
