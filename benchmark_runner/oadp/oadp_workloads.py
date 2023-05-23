@@ -36,7 +36,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-100-pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
+        # self.__oadp_scenario_name = 'backup-restic-pvc-util-2-4-1-rbd-100f-10gb-1001g' #backup-10pod-backup-vsm-pvc-util-minio-6g'
         self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
@@ -606,15 +606,20 @@ class OadpWorkloads(WorkloadsOperations):
             while current_wait_time <= int(timeout_value):
                 status_cmd = self.__ssh.run(cmd=f"oc  exec -n{namespace} {pod_name} -- /bin/bash -c 'pgrep -flc {process_text_to_monitor}'")
                 status_cmd_value = status_cmd.split('\n')[0]
+                logger.info(f':: INFO :: wait_until_process_inside_pod_completes: grep inside pod for {process_text_to_monitor} is returning value of {status_cmd} amount of time left for this check is: {int(timeout_value) - current_wait_time}')
+                logger.info(f':: INFO :: wait_until_process_inside_pod_completes: container utlized size is {disk_capacity}')
                 if int(status_cmd) == 0:
                     logger.info(':: INFO :: wait_until_process_inside_pod_completes: population related process is no longer found in container')
                     return True
                 else:
-                    logger.info(':: INFO :: wait_until_process_inside_pod_completes: population process is STILL running in container')
-                    time.sleep(3)
-            current_wait_time += 3
+                    disk_capacity = self.__ssh.run(cmd=f"oc  exec -i -n{namespace} {pod_name} -- /bin/bash -c \"du -sh {process_text_to_monitor}\"")
+                    logger.info(f':: INFO :: wait_until_process_inside_pod_completes: population process is STILL running, current container utlized size for {process_text_to_monitor} is {disk_capacity}, returning value is:{status_cmd} remaing time: {int(timeout_value) - current_wait_time} ')
+                    logger.info(f':: INFO :: wait_until_process_inside_pod_completes: sleeping for 10s, before next poll for container size')
+                    time.sleep(10)
+                current_wait_time += 10
         except Exception as err:
-            logger.info(f'Error in wait_until_process_inside_pod_completes pod {pod_name} timeout waiting for command {process_text_to_monitor} to not be found so raised an exception')
+            logger.info(f'Error: {err} in wait_until_process_inside_pod_completes pod {pod_name} timeout waiting for command {process_text_to_monitor} to not be found so raised an exception')
+            return False
 
     @logger_time_stamp
     def create_multi_pvutil_dataset(self, test_scenario):
@@ -675,8 +680,13 @@ class OadpWorkloads(WorkloadsOperations):
         else:
             running_pods = self.get_list_of_pods(namespace=namespace)
             for pod in running_pods:
-                self.wait_until_process_inside_pod_completes(pod_name=pod, namespace=namespace, process_text_to_monitor=mount_point,timeout_value=testcase_timeout)
-                logger.info(f"::INFO:: Population process inside pod {pod} in ns {namespace} has completed")
+                result_of_waiting = self.wait_until_process_inside_pod_completes(pod_name=pod, namespace=namespace, process_text_to_monitor=mount_point,timeout_value=testcase_timeout)
+                if result_of_waiting != False:
+                    logger.info(f"::INFO:: Population process inside pod {pod} in ns {namespace} has completed")
+                else:
+                    logger.error(f"::ERROR:: wait_until_process_inside_pod_completes returned False meaning the running process in {pod} in {namespace} population process has not completed as expected")
+
+
 
 
     @logger_time_stamp
@@ -909,14 +919,16 @@ class OadpWorkloads(WorkloadsOperations):
             while current_wait_time <= testcase_timeout:
                 state = self.__ssh.run(
                     cmd=f"oc get {cr_type}/{cr_name} -n openshift-adp -o jsonpath={jsonpath}")
-                if state in ['Completed', 'Failed', 'PartiallyFailed']:
+                if state in ['Completed', 'Failed', 'PartiallyFailed', 'Deleted' ]:
                     print(f"current status: CR {cr_name} state: {state} in ['Completed', 'Failed', 'PartiallyFailed']")
                     return True
-                    # sleep for x
+                elif state in ['Error']:
+                    logger.error( f':: ERROR :: current status: CR {cr_name} state: {state} that should not happen')
+                    return False
                 else:
-                    print(f"current cr state is: {state} meaning its still running as its NOT in 'Completed', 'Failed', 'PartiallyFailed'")
+                    print(f"current cr state is: {state} meaning its still running as its NOT in 'Completed', 'Failed', 'PartiallyFailed' or in Error state")
                     time.sleep(3)
-            current_wait_time += 3
+                current_wait_time += 3
         except Exception as err:
             logger.info(f'{cr_name} OADPWaitForConditionTimeout raised an exception')
 
@@ -1726,6 +1738,30 @@ class OadpWorkloads(WorkloadsOperations):
                 self.get_node_resource_avail_adm(ocp_node=bm)
 
     @logger_time_stamp
+    def check_oadp_cr_for_errors_and_warns(self, scenario):
+        """
+        method validates state of CR and outputs log errors or warnings
+        """
+        cr_type = scenario['args']['OADP_CR_TYPE']
+        cr_name = scenario['args']['OADP_CR_NAME']
+        jsonpath = "'{.status.errors}'"
+        error_count = self.__ssh.run(cmd=f"oc get {cr_type}/{cr_name} -n openshift-adp -o jsonpath={jsonpath}")
+        if error_count != '' and 'Error' not in error_count and int(error_count) > 0:
+            oadp_velero_log = os.path.join(self._run_artifacts_path, f'{cr_name}-error-and-warning-summary.log')
+            warnings_and_errors = self.__ssh.run(cmd=f"oc -n openshift-adp exec deployment/velero -c velero -it -- ./velero {cr_type} logs {cr_name} --insecure-skip-tls-verify | grep 'warn\|error\|critical\|exception'")
+            logger.info(f":: INFO ::  validate_oadp_cr :: reports the following errors and warnings for {cr_name} ")
+            logger.warn(f":: WARN ::  {cr_name} log showed:  {warnings_and_errors} ")
+            with open(f'{oadp_velero_log}', encoding="utf-8") as f:
+                f.write(warnings_and_errors)
+                f.close()
+        if error_count != '' and 'Error' in error_count:
+            logger.warn(f":: WARN ::  attempted to get parse CR {cr_name} logs but showed:  {error_count} ")
+
+
+
+
+
+    @logger_time_stamp
     def get_oadp_velero_and_cr_log(self, cr_name, cr_type):
         """
         method saves velero log to self.__artifactdir
@@ -1919,7 +1955,6 @@ class OadpWorkloads(WorkloadsOperations):
         # Load Scenario Details
         test_scenario = self.load_test_scenario()
 
-
         # Get OADP, Velero, Storage Details
         self.oadp_get_version_info()
         self.get_velero_details()
@@ -2006,6 +2041,7 @@ class OadpWorkloads(WorkloadsOperations):
         # Parse result CR for status, and timestamps
         self.parse_oadp_cr(ns='openshift-adp', cr_type=test_scenario['args']['OADP_CR_TYPE'],
                            cr_name=test_scenario['args']['OADP_CR_NAME'])
+        self.check_oadp_cr_for_errors_and_warns(scenario=test_scenario)
         self.get_oadp_velero_and_cr_log(cr_name=test_scenario['args']['OADP_CR_NAME'],
                                         cr_type=test_scenario['args']['OADP_CR_TYPE'])
         self.get_logs_by_pod_ns(namespace='openshift-adp')
