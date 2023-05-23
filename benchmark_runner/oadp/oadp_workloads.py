@@ -922,7 +922,7 @@ class OadpWorkloads(WorkloadsOperations):
                 if state in ['Completed', 'Failed', 'PartiallyFailed', 'Deleted' ]:
                     print(f"current status: CR {cr_name} state: {state} in ['Completed', 'Failed', 'PartiallyFailed']")
                     return True
-                elif state in ['Error']:
+                elif 'Error from server' in state:
                     logger.error( f':: ERROR :: current status: CR {cr_name} state: {state} that should not happen')
                     return False
                 else:
