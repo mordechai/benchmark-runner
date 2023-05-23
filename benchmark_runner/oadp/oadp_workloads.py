@@ -607,7 +607,6 @@ class OadpWorkloads(WorkloadsOperations):
                 status_cmd = self.__ssh.run(cmd=f"oc  exec -n{namespace} {pod_name} -- /bin/bash -c 'pgrep -flc {process_text_to_monitor}'")
                 status_cmd_value = status_cmd.split('\n')[0]
                 logger.info(f':: INFO :: wait_until_process_inside_pod_completes: grep inside pod for {process_text_to_monitor} is returning value of {status_cmd} amount of time left for this check is: {int(timeout_value) - current_wait_time}')
-                logger.info(f':: INFO :: wait_until_process_inside_pod_completes: container utlized size is {disk_capacity}')
                 if int(status_cmd) == 0:
                     logger.info(':: INFO :: wait_until_process_inside_pod_completes: population related process is no longer found in container')
                     return True
