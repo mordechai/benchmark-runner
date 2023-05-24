@@ -967,6 +967,13 @@ class OadpWorkloads(WorkloadsOperations):
         else:
             logger.info(':: INFO :: cephfs-shallow sc is present')
 
+
+    def set_velero_log_level(self, oadp_namespace):
+        """ sets velero log level """
+        json_query = """[{"op": "add", "path": "/spec/configuration/velero/logLevel", "value": "debug"}]"""
+        cmd_setting_velero_debug = self.__ssh.run(cmd=f"oc patch dataprotectionapplication example-velero -n {oadp_namespace} --type=json -p='{json_query}'")
+        logger.info(":: INFO :: Setting debug log level on velero")
+
     def config_dpa_for_cephfs_shallow(self, enable, oadp_namespace):
         """
         method adds or removes cephfs-shallow to dpa
@@ -1060,7 +1067,7 @@ class OadpWorkloads(WorkloadsOperations):
         dpa_name = dpa_data['metadata']['name']
         velero_enabled_plugins = dpa_data['spec']['configuration']['velero']['defaultPlugins']
         is_vsm_enabled = 'vsm' in velero_enabled_plugins
-        if dpa_data['spec'].get('Features', False) != False:
+        if dpa_data['spec'].get('features', False) != False:
             is_datamover_enabled = dpa_data['spec']['features']['dataMover']['enable']
         else:
             is_datamover_enabled = False
@@ -1146,16 +1153,27 @@ class OadpWorkloads(WorkloadsOperations):
 
         dpa_name = dpa_data['metadata']['name']
         velero_enabled_plugins = dpa_data['spec']['configuration']['velero']['defaultPlugins']
+        is_restic_enabled = dpa_data['spec']['configuration']['restic']['enable']
         is_vsm_enabled = 'vsm' in velero_enabled_plugins
-        if dpa_data['spec'].get('Features', False) != False:
+        if not is_restic_enabled:
+            # disabple restic plugin
+            json_query = '{"spec": {"configuration": {"restic": {"enable": true}}}}'
+            enable_restic = self.__ssh.run(cmd=f"oc patch dpa {dpa_name} -n {oadp_namespace} --type merge -p '{json_query}'")
+            if 'error' in enable_restic:
+                logger.error(f':: ERROR :: Attemmpted to disable restic - following output returned: {enable_restic}')
+            else:
+                logger.info(':: INFO :: Restic Secret enabled successfully')
+        if dpa_data['spec'].get('features', False) != False:
             is_datamover_enabled = dpa_data['spec']['features']['dataMover']['enable']
         else:
             is_datamover_enabled = False
         if is_datamover_enabled:
             query = '{"spec": {"features": {"dataMover": {"enable": false}}}}'
-            self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
-                                   patch_type='merge',
-                                   patch_json=query)
+            self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace, patch_type='merge', patch_json=query)
+
+            query = '[{"op":"remove", "path": "/spec/features"}]'
+            self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace, patch_type='json', patch_json=query)
+
         if 'vsm' in velero_enabled_plugins:
             logger.info(f":: INFO :: Current plugins that are enabled are: {velero_enabled_plugins}")
             for i in range(len(dpa_data['spec']['configuration']['velero']['defaultPlugins'])):
@@ -1968,6 +1986,9 @@ class OadpWorkloads(WorkloadsOperations):
         # Setup Default SC and Volume Snapshot Class
         self.set_default_storage_class(expected_sc)
         self.set_volume_snapshot_class(expected_sc,test_scenario)
+
+        # Set Velero Debug log level
+        self.set_velero_log_level(oadp_namespace='openshift-adp')
 
         # Setup Datamover if needed
         if test_scenario['args']['plugin'] == 'vsm':
