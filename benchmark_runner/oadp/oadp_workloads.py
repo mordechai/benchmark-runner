@@ -1748,15 +1748,9 @@ class OadpWorkloads(WorkloadsOperations):
         if error_count != '' and 'Error' not in error_count and int(error_count) > 0:
             oadp_velero_log = os.path.join(self._run_artifacts_path, f'{cr_name}-error-and-warning-summary.log')
             warnings_and_errors = self.__ssh.run(cmd=f"oc -n openshift-adp exec deployment/velero -c velero -it -- ./velero {cr_type} logs {cr_name} --insecure-skip-tls-verify | grep 'warn\|error\|critical\|exception'")
-            logger.info(f":: INFO ::  validate_oadp_cr :: reports the following errors and warnings for {cr_name} ")
-            logger.warn(f":: WARN ::  {cr_name} log showed:  {warnings_and_errors} ")
-            with open(f'{oadp_velero_log}', encoding="utf-8") as f:
-                f.write(warnings_and_errors)
-                f.close()
-        if error_count != '' and 'Error' in error_count:
-            logger.warn(f":: WARN ::  attempted to get parse CR {cr_name} logs but showed:  {error_count} ")
-
-
+            logger.info(f":: INFO ::  validate_oadp_cr :: reports the following {error_count} errors and warnings for {cr_name} ")
+            logger.warn(f":: WARN ::  {cr_name} log showed: ")
+            self.__ssh.run(cmd=f"oc -n openshift-adp exec deployment/velero -c velero -it -- ./velero {cr_type} logs {cr_name} --insecure-skip-tls-verify | grep 'warn\|error\|critical\|exception' >> {oadp_velero_log}")
 
 
 
