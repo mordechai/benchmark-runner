@@ -28,6 +28,7 @@ class OadpWorkloads(WorkloadsOperations):
         super().__init__()
         self.__oadp_path = '/tmp/mpqe-scale-scripts/mtc-helpers/busybox'
         self.__oadp_base_dir = '/tmp/mpqe-scale-scripts/oadp-helpers'
+        self.__oadp_misc_dir = '/tmp/mpqe-scale-scripts/misc-scripts'
         self.__oadp_scenario_data = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/internal_data/tests.yaml'
         self.__oadp_promql_queries = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/metrics/metrics-oadp.yaml'
         # environment variables
@@ -471,6 +472,73 @@ class OadpWorkloads(WorkloadsOperations):
                 else:
                     logger.warn(f':: WARNING :: verify_running_pods: {target_namespace} has  {len(running_pods)} in running state, execpted total desired: {num_of_pods_expected}')
                     return False
+
+    def clean_s3_bucket(self, scenario):
+        """
+        cleans s3 bucket
+        if minio:
+         "[default]" >> /tmp/mycreds
+         tail -n 2 /root/GIT/oadp-qe-automation/credentials >> /tmp/mycreds
+        if mcg:
+         BUCKET=oadp-bucket;export AWS_SHARED_CREDENTIALS_FILE=/root/GIT/oadp-qe-automation/credentials
+        """
+        # get route for s3 endpoint from openshift-storage
+        # get route from dpa
+        # is_mcg: dpa_route == s3 storage:
+        # if not is_mcg:
+        #   "[default]" >> /tmp/mycreds
+        #   tail -n 2 /root/GIT/oadp-qe-automation/credentials >> /tmp/mycreds
+        #   BUCKET=oadp-bucket;export AWS_SHARED_CREDENTIALS_FILE=/tmp/mycreds
+        # else:
+        #   BUCKET=oadp-bucket;export AWS_SHARED_CREDENTIALS_FILE=/root/GIT/oadp-qe-automation/credentials
+        #   aws --endpoint=http://{s3url} s3 rm s3://$BUCKET --recursive --no-verify-ssl
+
+    def clean_odf_pool(self, scenario):
+        """
+        cleans pool of ceph and rbd
+        """
+        ceph_pod = self.__ssh.run(cmd=f'oc get pods -n openshift-storage --field-selector status.phase=Running --no-headers -o custom-columns=":metadata.name" | grep tools')
+        if ceph_pod != '':
+            num_of_csi_snap_query = 'rbd ls --pool=ocs-storagecluster-cephblockpool | wc -l'
+            purge_csi_snap_cmd = 'for i in $(rbd ls --pool=ocs-storagecluster-cephblockpool) ; do res=$(rbd status --pool=ocs-storagecluster-cephblockpool $i); if [[ $res == "Watchers: none" ]] ; then rbd snap purge --pool=ocs-storagecluster-cephblockpool $i ; fi; done'
+            rm_csi_snap_cmd = 'for i in $(rbd ls --pool=ocs-storagecluster-cephblockpool) ; do res=$(rbd status --pool=ocs-storagecluster-cephblockpool $i); if [[ $res == "Watchers: none" ]] ; then rbd rm --pool=ocs-storagecluster-cephblockpool $i ; fi; done'
+            purge_cephfs = """for i in $(ceph fs subvolume ls ocs-storagecluster-cephfilesystem csi | grep csi | awk '{print $2}' | tr -d "\"") ; do res=$(ceph fs subvolume info ocs-storagecluster-cephfilesystem $i csi | grep state | awk '{print $2}' | tr -d "\",") ; echo "Status CSI VOL:" $res "CSI Vol: " $i ; if [[ $res == "snapshot-retained" ]] ; then for j in $(ceph fs subvolume snapshot ls ocs-storagecluster-cephfilesystem $i csi | grep csi-snap | awk '{print $2}' | tr -d "\"") ; do echo "Delete CSI State:" $res "CSI Vol: " $i "Snapshotname: " $j ; ceph fs subvolume snapshot rm ocs-storagecluster-cephfilesystem $i $j csi ; done fi done"""
+
+            num_of_csi_snaps_found = self.__ssh.run(f"cmd=f'oc exec -n openshift-storage {ceph_pod} -- /bin/bash -c '{num_of_csi_snap_query}'")
+            # if int(num_of_csi_snaps_found) > 0:
+            logger.info(f"::: INFO ::  clean_odf_pool has found {num_of_csi_snaps_found} will attempt purge")
+            purge_csi_snap_cmd_result = self.__ssh.run(f"cmd=f'oc exec -n openshift-storage {ceph_pod} -- /bin/bash -c '{purge_csi_snap_cmd}'")
+            logger.info(f"::: INFO ::  clean_odf_pool has found {num_of_csi_snaps_found} purge resulted in: {purge_csi_snap_cmd_result}")
+            rm_csi_snap_cmd_result = self.__ssh.run(f"cmd=f'oc exec -n openshift-storage {ceph_pod} -- /bin/bash -c '{rm_csi_snap_cmd}'")
+            logger.info(f"::: INFO ::  clean_odf_pool has found {num_of_csi_snaps_found} removal after purge resulted in: {rm_csi_snap_cmd}")
+            purge_cephfs_result = self.__ssh.run(f"cmd=f'oc exec -n openshift-storage {ceph_pod} -- /bin/bash -c '{purge_cephfs}'")
+            logger.info(f"::: INFO ::  clean_odf_pool has ran {purge_cephfs} removal after purge resulted in: {purge_cephfs_result}")
+        else:
+            logger.warn(":: WARN :: clean_odf_pool was not run ")
+
+
+
+    @logger_time_stamp
+    def delete_vsc(self, scenario, ns_scoped):
+        """
+        deletes vsc cr_type and cr_name
+        """
+        cr_type = scenario['args']['OADP_CR_TYPE']
+        cr_name = scenario['args']['OADP_CR_NAME']
+        target_namespace = scenario['args']['namespaces_to_backup']
+
+        if ns_scoped:
+            logger.info("::: INFO :: Attempting VSC Clean via vsc_clean.sh script meaning scoped to specific ns")
+            vsc_cmd = self.__ssh.run(cmd=f"{self.__oadp_misc_dir}/vsc_clean.sh {target_namespace} {cr_type} {cr_name}")
+        else:
+            logger.info("::: INFO :: Attempting VSC Clean ALL vsc")
+            if scenario['args']['plugin'] != 'vsm':
+                vsc_removal_all = """for i in `oc get vsc -A -o custom-columns=NAME:.metadata.name`; do echo $i; oc patch vsc $i -p '{"metadata":{"finalizers":null}}' --type=merge; done"""
+            else:
+                vsc_removal_all = """oc delete vsb -A --all; oc delete vsr -A --all; oc delete vsc -A --all; oc delete vs -A --all; oc delete replicationsources.volsync.backube -A --all; oc delete replicationdestination.volsync.backube -A --all"""
+            logger.info(f"::: INFO :: delete_vsc Attempting  command {vsc_removal_all}")
+            vsc_cmd = self.__ssh.run(cmd=f"{vsc_removal_all}")
+        logger.info(f"::: INFO :: delete_vsc result of command with scope of deletion ns_scoped: {ns_scoped} was {vsc_cmd}")
 
     @logger_time_stamp
     def delete_oadp_source_dataset(self, target_namespace):
