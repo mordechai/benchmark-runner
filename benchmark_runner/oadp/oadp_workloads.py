@@ -542,8 +542,6 @@ class OadpWorkloads(WorkloadsOperations):
             done'
             """
             if storage == 'ocs-storagecluster-ceph-rbd':
-                logger.info(
-                    f":: INFO :: Attempting to set for {sc} vsc the output was {cmd_set_volume_snapshot_class} ")
                 num_of_csi_snaps_found_list = self.__ssh.run(
                     cmd=f"oc exec -n openshift-storage {ceph_pod} -- /bin/bash -c  'rbd ls --pool=ocs-storagecluster-cephblockpool'")
                 num_of_csi_snaps_found = self.__ssh.run(
@@ -562,7 +560,7 @@ class OadpWorkloads(WorkloadsOperations):
                     f"::: INFO ::  clean_odf_pool POST removal list is: {num_of_csi_snaps_found_list_postclean}")
                 logger.info(f"::: INFO ::  clean_odf_pool POST removal has found {num_of_csi_snaps_found_postclean}")
 
-            if storage == 'ocs-storagecluster-cephfs' or sc == 'ocs-storagecluster-cephfs-shallow':
+            if storage == 'ocs-storagecluster-cephfs' or storage == 'ocs-storagecluster-cephfs-shallow':
                 purge_cephfs_result = self.__ssh.run(cmd=f"oc exec -n openshift-storage {ceph_pod} -- /bin/bash -c {purge_cephfs}")
                 logger.info(f"::: INFO ::  clean_odf_pool attempted cleanup of cephfs {purge_cephfs} resulting in: {purge_cephfs_result}")
         else:
@@ -2091,6 +2089,7 @@ class OadpWorkloads(WorkloadsOperations):
         # Load Scenario Details
         test_scenario = self.load_test_scenario()
 
+
         # Get OADP, Velero, Storage Details
         self.oadp_get_version_info()
         self.get_velero_details()
@@ -2229,9 +2228,9 @@ class OadpWorkloads(WorkloadsOperations):
                 logger.info(f"*** Attempting post run: clean up for {scenario['args']['OADP_CR_NAME']} that is a {scenario['testtype']} relevant CRs to remove are: restore: {scenario['args']['OADP_CR_NAME']} & relevant CRs related backup CR: {scenario['args']['backup_name']} ")
                 self.delete_oadp_custom_resources( ns='openshift-adp', cr_type=scenario['args']['OADP_CR_TYPE'], cr_name=scenario['args']['OADP_CR_NAME'])
                 self.delete_oadp_custom_resources(ns='openshift-adp', cr_type='backup', cr_name=scenario['args']['backup_name'])
-                self.clean_s3_bucket(scenario=test_scenario, oadp_namespace='openshift-adp')
-                self.delete_vsc(scenario=test_scenario, ns_scoped=False)
-                self.clean_odf_pool(scenario=test_scenario)
+                self.clean_s3_bucket(scenario=scenario, oadp_namespace='openshift-adp')
+                self.delete_vsc(scenario=scenario, ns_scoped=False)
+                self.clean_odf_pool(scenario=scenario)
             if 'backup' == scenario['testtype']:
                 logger.info(f"*** Attempting post run: clean up for {scenario['args']['OADP_CR_NAME']} that is a {scenario['testtype']} relevant CRs to remove are: {scenario['args']['OADP_CR_NAME']}")
                 self.delete_oadp_custom_resources('openshift-adp',cr_type=scenario['args']['OADP_CR_TYPE'],cr_name=scenario['args']['OADP_CR_NAME'])
