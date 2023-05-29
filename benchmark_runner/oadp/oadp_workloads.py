@@ -2198,7 +2198,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.create_json_summary()
 
         #Post Run Cleanup
-        self.cleaning_up_oadp_resources(test_scenario)
+        self.cleaning_up_oadp_resources(scenario=test_scenario)
 
         if os.path.exists(os.path.join(self.__result_report)) and not os.stat(self.__result_report).st_size == 0:
             self.__ssh.run(cmd=f'cp {self.__result_report} {self._run_artifacts_path}')
@@ -2227,8 +2227,8 @@ class OadpWorkloads(WorkloadsOperations):
         if self.__oadp_cleanup_cr_post_run:
             if 'restore' == scenario['testtype']:
                 logger.info(f"*** Attempting post run: clean up for {scenario['args']['OADP_CR_NAME']} that is a {scenario['testtype']} relevant CRs to remove are: restore: {scenario['args']['OADP_CR_NAME']} & relevant CRs related backup CR: {scenario['args']['backup_name']} ")
-                self.delete_oadp_custom_resources( 'openshift-adp', cr_type=scenario['args']['OADP_CR_TYPE'], cr_name=scenario['args']['OADP_CR_NAME'])
-                self.delete_oadp_custom_resources('openshift-adp', cr_type='backup', cr_name=scenario['args']['backup_name'])
+                self.delete_oadp_custom_resources( ns='openshift-adp', cr_type=scenario['args']['OADP_CR_TYPE'], cr_name=scenario['args']['OADP_CR_NAME'])
+                self.delete_oadp_custom_resources(ns='openshift-adp', cr_type='backup', cr_name=scenario['args']['backup_name'])
                 self.clean_s3_bucket(scenario=test_scenario, oadp_namespace='openshift-adp')
                 self.delete_vsc(scenario=test_scenario, ns_scoped=False)
                 self.clean_odf_pool(scenario=test_scenario)
