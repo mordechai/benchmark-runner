@@ -37,14 +37,14 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'backup-restic-pvc-util-2-4-1-rbd-100f-10gb-1001g' #backup-10pod-backup-vsm-pvc-util-minio-6g'
+        # self.__oadp_scenario_name = 'restore-csi-pvc-util-2-1-5-rbd-swift-1.5t' #backup-10pod-backup-vsm-pvc-util-minio-6g'
         self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
         self.__oadp_validation_mode = self._environment_variables_dict.get('validation_mode', 'light') # none - skips || light - % of randomly selected pods checked || full - every pod checked
         self.__retry_logic = {
-            'interval_between_checks=': 15,
+            'interval_between_checks': 15,
              'max_attempts': 20
         }
         self.__result_report = '/tmp/oadp-report.json'
@@ -385,7 +385,12 @@ class OadpWorkloads(WorkloadsOperations):
                     current_status_of_pods = self.get_status_of_pods_by_ns(scenario)
                     are_status_of_pods_the_same = self.compare_dicts(status_of_pods, current_status_of_pods)
                     number_of_running_pods_increased = current_status_of_pods['Running'] > status_of_pods['Running']
+                    number_of_running_pods_already_at_desired_state = current_status_of_pods['Running'] == num_of_pods_expected
                     total_pods_in_run_state_divisble_by_500 = (current_status_of_pods['Running'] % 500 == 0)
+
+                    if number_of_running_pods_already_at_desired_state:
+                        logger.info(f":: INFO :: verify_pods_are_progressing: pods states are progressing number of runniing pods previously: {status_of_pods['Running']} currently: {current_status_of_pods['Running']} number_of_running_pods_already_at_desired_state: {number_of_running_pods_already_at_desired_state}")
+                        return True
 
                     if (not are_status_of_pods_the_same and number_of_running_pods_increased):
                         logger.info(f":: INFO :: verify_pods_are_progressing: pods states are progressing number of runniing pods previously: { status_of_pods['Running']} currently: {current_status_of_pods['Running']}  ")
@@ -423,6 +428,7 @@ class OadpWorkloads(WorkloadsOperations):
                     f':: WARN :: waiting_for_ns_to_reach_desired_pods: {target_namespace} has  {len(running_pods)} in running state which is MORE than total desired: {num_of_pods_expected} please check your namespace usage between tests this method is returning False')
                 return False
             else:
+                logger.info (f"interval_between_checks=self.__retry_logic['interval_between_checks'] is {self.__retry_logic['interval_between_checks']}")
                 pods_progressing = self.verify_pods_are_progressing(scenario=scenario, interval_between_checks=self.__retry_logic['interval_between_checks'], max_attempts=self.__retry_logic['max_attempts'])
                 if not pods_progressing:
                     return False
@@ -439,7 +445,7 @@ class OadpWorkloads(WorkloadsOperations):
                             time.sleep(3)
                     current_wait_time += 3
         except Exception as err:
-            logger.warn(f'Error in waiting_for_ns_to_reach_desired_pods time out waiting to reach desired state so raised an exception')
+            logger.warn(f'Error in waiting_for_ns_to_reach_desired_pods {err} time out waiting to reach desired state so raised an exception')
 
     @logger_time_stamp
     def verify_running_pods(self, num_of_pods_expected, target_namespace):
