@@ -39,6 +39,7 @@ class OadpWorkloads(WorkloadsOperations):
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
         # self.__oadp_scenario_name = 'backup-restic-pvc-util-2-4-1-rbd-100f-10gb-1001g' #backup-10pod-backup-vsm-pvc-util-minio-6g'
         self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
+        self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
         self.__oadp_validation_mode = self._environment_variables_dict.get('validation_mode', 'light') # none - skips || light - % of randomly selected pods checked || full - every pod checked
@@ -473,7 +474,7 @@ class OadpWorkloads(WorkloadsOperations):
                     logger.warn(f':: WARNING :: verify_running_pods: {target_namespace} has  {len(running_pods)} in running state, execpted total desired: {num_of_pods_expected}')
                     return False
 
-    def clean_s3_bucket(self, scenario):
+    def clean_s3_bucket(self, scenario, oadp_namespace):
         """
         cleans s3 bucket
         if minio:
@@ -482,37 +483,82 @@ class OadpWorkloads(WorkloadsOperations):
         if mcg:
          BUCKET=oadp-bucket;export AWS_SHARED_CREDENTIALS_FILE=/root/GIT/oadp-qe-automation/credentials
         """
-        # get route for s3 endpoint from openshift-storage
-        # get route from dpa
-        # is_mcg: dpa_route == s3 storage:
-        # if not is_mcg:
-        #   "[default]" >> /tmp/mycreds
-        #   tail -n 2 /root/GIT/oadp-qe-automation/credentials >> /tmp/mycreds
-        #   BUCKET=oadp-bucket;export AWS_SHARED_CREDENTIALS_FILE=/tmp/mycreds
-        # else:
-        #   BUCKET=oadp-bucket;export AWS_SHARED_CREDENTIALS_FILE=/root/GIT/oadp-qe-automation/credentials
-        #   aws --endpoint=http://{s3url} s3 rm s3://$BUCKET --recursive --no-verify-ssl
+        dpa_data = self.get_oc_resource_to_json(resource_type='dpa', resource_name=self.__oadp_dpa,
+                                                namespace=oadp_namespace)
+        if bool(dpa_data) == False:
+            logger.error(':: ERROR :: DPA is not present command to get dpa as json resulted in empty dict')
+        s3_from_dpa = dpa_data['spec']['backupLocations'][0]['velero']['config']['s3Url']
+        s3_from_dpa = s3_from_dpa.split('//')[-1]
+        if s3_from_dpa == '':
+            logger.warn(':: INFO :: WARNING DPA did not contain S3 URL we will assume mcg will be used')
+            json_query = '{.spec.host}'
+            mcg_s3_url = self.__ssh.run(cmd=f" oc get route s3 -n openshift-storage -o jsonpath='{json_query}'")
+            s3_from_dpa = mcg_s3_url
+        json_query = '{.spec.host}'
+        mcg_s3_url = self.__ssh.run(cmd=f" oc get route s3 -n openshift-storage -o jsonpath='{json_query}'")
+        s3_uses_local_mcg  = mcg_s3_url in s3_from_dpa
+        logger.info(f":: INFO :: clean_s3_bucket detected s3_uses_local_mcg: {s3_uses_local_mcg} now attempting rm on bucket {s3_from_dpa} ")
+        self.__ssh.run(cmd=f"{self.__oadp_base_dir}/misc-scripts/bucket-clean.yaml -e 'use_nooba={s3_uses_local_mcg} s3_url={s3_from_dpa}'")
 
     def clean_odf_pool(self, scenario):
         """
         cleans pool of ceph and rbd
         """
+        storage = scenario['dataset']['sc']
         ceph_pod = self.__ssh.run(cmd=f'oc get pods -n openshift-storage --field-selector status.phase=Running --no-headers -o custom-columns=":metadata.name" | grep tools')
         if ceph_pod != '':
+            num_of_csi_snap_query_list = 'rbd ls --pool=ocs-storagecluster-cephblockpool'
             num_of_csi_snap_query = 'rbd ls --pool=ocs-storagecluster-cephblockpool | wc -l'
-            purge_csi_snap_cmd = 'for i in $(rbd ls --pool=ocs-storagecluster-cephblockpool) ; do res=$(rbd status --pool=ocs-storagecluster-cephblockpool $i); if [[ $res == "Watchers: none" ]] ; then rbd snap purge --pool=ocs-storagecluster-cephblockpool $i ; fi; done'
-            rm_csi_snap_cmd = 'for i in $(rbd ls --pool=ocs-storagecluster-cephblockpool) ; do res=$(rbd status --pool=ocs-storagecluster-cephblockpool $i); if [[ $res == "Watchers: none" ]] ; then rbd rm --pool=ocs-storagecluster-cephblockpool $i ; fi; done'
-            purge_cephfs = """for i in $(ceph fs subvolume ls ocs-storagecluster-cephfilesystem csi | grep csi | awk '{print $2}' | tr -d "\"") ; do res=$(ceph fs subvolume info ocs-storagecluster-cephfilesystem $i csi | grep state | awk '{print $2}' | tr -d "\",") ; echo "Status CSI VOL:" $res "CSI Vol: " $i ; if [[ $res == "snapshot-retained" ]] ; then for j in $(ceph fs subvolume snapshot ls ocs-storagecluster-cephfilesystem $i csi | grep csi-snap | awk '{print $2}' | tr -d "\"") ; do echo "Delete CSI State:" $res "CSI Vol: " $i "Snapshotname: " $j ; ceph fs subvolume snapshot rm ocs-storagecluster-cephfilesystem $i $j csi ; done fi done"""
+            purge_csi_snap_cmd = 'for i in $(rbd ls --pool=ocs-storagecluster-cephblockpool); do res=$(rbd status --pool=ocs-storagecluster-cephblockpool $i); if [[ "$res" == "Watchers: none" ]]; then rbd snap purge --pool=ocs-storagecluster-cephblockpool $i; fi; done'
+            rm_csi_snap_cmd =    'for i in $(rbd ls --pool=ocs-storagecluster-cephblockpool); do res=$(rbd status --pool=ocs-storagecluster-cephblockpool $i); if [[ "$res" == "Watchers: none" ]]; then rbd rm --pool=ocs-storagecluster-cephblockpool $i; fi; done'
 
-            num_of_csi_snaps_found = self.__ssh.run(f"cmd=f'oc exec -n openshift-storage {ceph_pod} -- /bin/bash -c '{num_of_csi_snap_query}'")
-            # if int(num_of_csi_snaps_found) > 0:
-            logger.info(f"::: INFO ::  clean_odf_pool has found {num_of_csi_snaps_found} will attempt purge")
-            purge_csi_snap_cmd_result = self.__ssh.run(f"cmd=f'oc exec -n openshift-storage {ceph_pod} -- /bin/bash -c '{purge_csi_snap_cmd}'")
-            logger.info(f"::: INFO ::  clean_odf_pool has found {num_of_csi_snaps_found} purge resulted in: {purge_csi_snap_cmd_result}")
-            rm_csi_snap_cmd_result = self.__ssh.run(f"cmd=f'oc exec -n openshift-storage {ceph_pod} -- /bin/bash -c '{rm_csi_snap_cmd}'")
-            logger.info(f"::: INFO ::  clean_odf_pool has found {num_of_csi_snaps_found} removal after purge resulted in: {rm_csi_snap_cmd}")
-            purge_cephfs_result = self.__ssh.run(f"cmd=f'oc exec -n openshift-storage {ceph_pod} -- /bin/bash -c '{purge_cephfs}'")
-            logger.info(f"::: INFO ::  clean_odf_pool has ran {purge_cephfs} removal after purge resulted in: {purge_cephfs_result}")
+            purg_csi_snap_and_rm_in_one = """'
+            for i in $(rbd ls --pool=ocs-storagecluster-cephblockpool); do
+                res=$(rbd status --pool=ocs-storagecluster-cephblockpool $i)
+                echo "rbd status --pool=ocs-storagecluster-cephblockpool $i ==> $res" 
+                if [[ $res == "Watchers: none" ]]; then
+                    echo $i
+                    rbd snap purge --pool=ocs-storagecluster-cephblockpool $i
+                    rbd rm --pool=ocs-storagecluster-cephblockpool $i
+                fi
+            done'
+            """
+            purge_cephfs = """'
+            for i in $(ceph fs subvolume ls ocs-storagecluster-cephfilesystem csi | grep csi | awk "{print \$2}" | tr -d "\""); do
+                res=$(ceph fs subvolume info ocs-storagecluster-cephfilesystem $i csi | grep state | awk "{print \$2}" | tr -d "\",")
+                echo "Status CSI VOL:" $res "CSI Vol: " $i
+                if [[ $res == "snapshot-retained" ]]; then
+                    for j in $(ceph fs subvolume snapshot ls ocs-storagecluster-cephfilesystem $i csi | grep csi-snap | awk "{print \$2}" | tr -d "\""); do
+                        echo "Delete CSI State:" $res "CSI Vol: " $i "Snapshotname: " $j
+                        ceph fs subvolume snapshot rm ocs-storagecluster-cephfilesystem $i $j csi
+                    done
+                fi
+            done'
+            """
+            if storage == 'ocs-storagecluster-ceph-rbd':
+                logger.info(
+                    f":: INFO :: Attempting to set for {sc} vsc the output was {cmd_set_volume_snapshot_class} ")
+                num_of_csi_snaps_found_list = self.__ssh.run(
+                    cmd=f"oc exec -n openshift-storage {ceph_pod} -- /bin/bash -c  'rbd ls --pool=ocs-storagecluster-cephblockpool'")
+                num_of_csi_snaps_found = self.__ssh.run(
+                    cmd=f"oc exec -n openshift-storage {ceph_pod} -- /bin/bash -c  'rbd ls --pool=ocs-storagecluster-cephblockpool' | wc -l")
+                logger.info(f"::: INFO ::  clean_odf_pool has found {num_of_csi_snaps_found} will attempt purge")
+                logger.info(f"::: INFO ::  clean_odf_pool list are:  {num_of_csi_snaps_found_list} ")
+                purg_csi_snap_and_rm_in_one_result = self.__ssh.run(
+                    cmd=f"oc exec -n openshift-storage {ceph_pod} -- /bin/bash -c {purg_csi_snap_and_rm_in_one}")
+                logger.info(
+                    f"::: INFO ::  clean_odf_pool attempted purge and rm output: {purg_csi_snap_and_rm_in_one_result}")
+                num_of_csi_snaps_found_list_postclean = self.__ssh.run(
+                    cmd=f"oc exec -n openshift-storage {ceph_pod} -- /bin/bash -c  'rbd ls --pool=ocs-storagecluster-cephblockpool'")
+                num_of_csi_snaps_found_postclean = self.__ssh.run(
+                    cmd=f"oc exec -n openshift-storage {ceph_pod} -- /bin/bash -c  'rbd ls --pool=ocs-storagecluster-cephblockpool' | wc -l")
+                logger.info(
+                    f"::: INFO ::  clean_odf_pool POST removal list is: {num_of_csi_snaps_found_list_postclean}")
+                logger.info(f"::: INFO ::  clean_odf_pool POST removal has found {num_of_csi_snaps_found_postclean}")
+
+            if storage == 'ocs-storagecluster-cephfs' or sc == 'ocs-storagecluster-cephfs-shallow':
+                purge_cephfs_result = self.__ssh.run(cmd=f"oc exec -n openshift-storage {ceph_pod} -- /bin/bash -c {purge_cephfs}")
+                logger.info(f"::: INFO ::  clean_odf_pool attempted cleanup of cephfs {purge_cephfs} resulting in: {purge_cephfs_result}")
         else:
             logger.warn(":: WARN :: clean_odf_pool was not run ")
 
@@ -527,7 +573,7 @@ class OadpWorkloads(WorkloadsOperations):
         cr_name = scenario['args']['OADP_CR_NAME']
         target_namespace = scenario['args']['namespaces_to_backup']
 
-        if ns_scoped:
+        if ns_scoped == True:
             logger.info("::: INFO :: Attempting VSC Clean via vsc_clean.sh script meaning scoped to specific ns")
             vsc_cmd = self.__ssh.run(cmd=f"{self.__oadp_misc_dir}/vsc_clean.sh {target_namespace} {cr_type} {cr_name}")
         else:
@@ -1186,8 +1232,13 @@ class OadpWorkloads(WorkloadsOperations):
             else:
                 logger.info(':: INFO :: Restic Secret disabled successfully')
         # Get S3 URL
-        json_query = '{.spec.host}'
-        cmd_get_s3_url = self.__ssh.run(cmd=f" oc get route s3 -n openshift-storage -o jsonpath='{json_query}'")
+        if self.__oadp_bucket == False:
+            logger.info(":: INFO :: Using S3 bucket found in mcg route ")
+            json_query = '{.spec.host}'
+            cmd_get_s3_url = self.__ssh.run(cmd=f" oc get route s3 -n openshift-storage -o jsonpath='{json_query}'")
+        else:
+            logger.info(f":: INFO :: Using S3 bucket passed by user as {self.__oadp_bucket} found in mcg route ")
+            cmd_get_s3_url = self.__oadp_bucket
         if (cmd_get_s3_url != '') and (not 'error' in cmd_get_s3_url):
             logger.info(f':: INFO :: Setting S3 {cmd_get_s3_url} to {dpa_name}')
             json_query = f"""[{{"op": "replace", "path": "/spec/backupLocations/0/velero/config/s3Url", "value": "http://{cmd_get_s3_url}"}}]"""
@@ -2143,7 +2194,6 @@ class OadpWorkloads(WorkloadsOperations):
         #Post Run Cleanup
         self.cleaning_up_oadp_resources(test_scenario)
 
-
         if os.path.exists(os.path.join(self.__result_report)) and not os.stat(self.__result_report).st_size == 0:
             self.__ssh.run(cmd=f'cp {self.__result_report} {self._run_artifacts_path}')
             return True
@@ -2173,6 +2223,9 @@ class OadpWorkloads(WorkloadsOperations):
                 logger.info(f"*** Attempting post run: clean up for {scenario['args']['OADP_CR_NAME']} that is a {scenario['testtype']} relevant CRs to remove are: restore: {scenario['args']['OADP_CR_NAME']} & relevant CRs related backup CR: {scenario['args']['backup_name']} ")
                 self.delete_oadp_custom_resources( 'openshift-adp', cr_type=scenario['args']['OADP_CR_TYPE'], cr_name=scenario['args']['OADP_CR_NAME'])
                 self.delete_oadp_custom_resources('openshift-adp', cr_type='backup', cr_name=scenario['args']['backup_name'])
+                self.clean_s3_bucket(scenario=test_scenario, oadp_namespace='openshift-adp')
+                self.delete_vsc(scenario=test_scenario, ns_scoped=False)
+                self.clean_odf_pool(scenario=test_scenario)
             if 'backup' == scenario['testtype']:
                 logger.info(f"*** Attempting post run: clean up for {scenario['args']['OADP_CR_NAME']} that is a {scenario['testtype']} relevant CRs to remove are: {scenario['args']['OADP_CR_NAME']}")
                 self.delete_oadp_custom_resources('openshift-adp',cr_type=scenario['args']['OADP_CR_TYPE'],cr_name=scenario['args']['OADP_CR_NAME'])
