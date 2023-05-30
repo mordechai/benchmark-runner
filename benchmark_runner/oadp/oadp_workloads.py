@@ -504,7 +504,14 @@ class OadpWorkloads(WorkloadsOperations):
         mcg_s3_url = self.__ssh.run(cmd=f" oc get route s3 -n openshift-storage -o jsonpath='{json_query}'")
         s3_uses_local_mcg  = mcg_s3_url in s3_from_dpa
         logger.info(f":: INFO :: clean_s3_bucket detected s3_uses_local_mcg: {s3_uses_local_mcg} now attempting rm on bucket {s3_from_dpa} ")
-        self.__ssh.run(cmd=f"{self.__oadp_base_dir}/misc-scripts/bucket-clean.yaml -e 'use_nooba={s3_uses_local_mcg} s3_url={s3_from_dpa}'")
+        logger.info(f"{self.__oadp_misc_dir}/bucket-clean.yaml -e 'use_nooba={s3_uses_local_mcg} s3_url={s3_from_dpa}'")
+        clean_bucket_cmd = self.__ssh.run(cmd=f"ansible-playbook {self.__oadp_misc_dir}/bucket-clean.yaml -e 'use_nooba={s3_uses_local_mcg} s3_url={s3_from_dpa}' -vvvv")
+        ran_without_errors = self.validate_ansible_play(clean_bucket_cmd)
+        if not ran_without_errors:
+            logger.warn(f":: WARN :: clean_s3_bucket FAILED to run successfully see:  {clean_bucket_cmd} ")
+        else:
+            logger.info(f":: INFO :: clean_s3_bucket invoked successfully via ansible-play output was: {clean_bucket_cmd} ")
+
 
     def clean_odf_pool(self, scenario):
         """
