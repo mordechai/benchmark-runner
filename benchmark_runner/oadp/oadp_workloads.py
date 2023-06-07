@@ -37,8 +37,8 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'restore-csi-pvc-util-2-1-5-rbd-swift-1.5t' #backup-10pod-backup-vsm-pvc-util-minio-6g'
-        self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
+        self.__oadp_scenario_name = 'backup-restic-pvc-util-2-3-0-rbd-dd-1.1t' #backup-10pod-backup-vsm-pvc-util-minio-6g'
+        # self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
@@ -773,13 +773,13 @@ class OadpWorkloads(WorkloadsOperations):
                 file_size = test_scenario['dataset']['files_size']
                 dept_count = test_scenario['dataset']['dept_count']
                 playbook_extra_var = (
-                    f"dir_count={dir_count}  files_count={files_count}  files_size={file_size}  dept_count={dept_count}  pvc_size={pvc_size} deployment_name={deployment_name} dataset_path={dataset_path} namespace={namespace} pvc_name={pvc_name}")
+                    f"dir_count={dir_count}  files_count={files_count}  files_size={file_size}  dept_count={dept_count}  pvc_size={pvc_size} deployment_name={deployment_name} dataset_path={dataset_path} namespace={namespace} pvc_name={pvc_name} sc={sc}")
 
             if active_role == 'dd_generator':
                 bs = test_scenario['dataset']['bs']
                 count = test_scenario['dataset']['count']
                 playbook_extra_var = (
-                    f"bs={bs} count={count}  pvc_size={pvc_size}  deployment_name={deployment_name} dataset_path={dataset_path} namespace={namespace} pvc_name={pvc_name}")
+                    f"bs={bs} count={count}  pvc_size={pvc_size}  deployment_name={deployment_name} dataset_path={dataset_path} namespace={namespace} pvc_name={pvc_name} sc={sc}")
 
             create_data_ansible_output = self.__ssh.run(cmd=f"ansible-playbook {playbook_path}  --extra-vars  '{playbook_extra_var}' -vvv")
             create_data_ansible_output_responses.append(create_data_ansible_output)
