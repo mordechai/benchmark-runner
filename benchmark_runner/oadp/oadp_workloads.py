@@ -2191,9 +2191,6 @@ class OadpWorkloads(WorkloadsOperations):
                                         cr_type=test_scenario['args']['OADP_CR_TYPE'])
         self.get_logs_by_pod_ns(namespace='openshift-adp')
 
-        # Get OCP node info
-        self.collect_all_node_resource()
-
         # Post Run Validations
         #    check for pod restarts / cluster operator status
         self.verify_pod_restarts('openshift-adp')
