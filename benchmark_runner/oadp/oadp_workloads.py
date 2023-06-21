@@ -1044,13 +1044,13 @@ class OadpWorkloads(WorkloadsOperations):
                 state = self.__ssh.run(
                     cmd=f"oc get {cr_type}/{cr_name} -n openshift-adp -o jsonpath={jsonpath}")
                 if state in ['Completed', 'Failed', 'PartiallyFailed', 'Deleted' ]:
-                    print(f"current status: CR {cr_name} state: {state} in ['Completed', 'Failed', 'PartiallyFailed']")
+                    logger.info(f"::: INFO ::: wait_for_condition_of_oadp_cr: CR current status: of {cr_name} state: {state} in ['Completed', 'Failed', 'PartiallyFailed']")
                     return True
-                elif 'Error from server' in state:
-                    logger.error( f':: ERROR :: current status: CR {cr_name} state: {state} that should not happen')
+                if 'Error from server' in state:
+                    logger.error( f':: ERROR :: wait_for_condition_of_oadp_cr: is returning ERROR in its current status: CR {cr_name} state: {state} that should not happen')
                     return False
                 else:
-                    print(f"current cr state is: {state} meaning its still running as its NOT in 'Completed', 'Failed', 'PartiallyFailed' or in Error state")
+                    logger.info(f"::: INFO ::: wait_for_condition_of_oadp_cr: {state} meaning its still running as its NOT in 'Completed', 'Failed', 'PartiallyFailed' an Error state")
                     time.sleep(3)
                 current_wait_time += 3
         except Exception as err:
