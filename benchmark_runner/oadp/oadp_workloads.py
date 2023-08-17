@@ -55,6 +55,10 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_resources = {}
         self.__oadp_runtime_resource_mapping = {}
         self.__oadp_dpa = 'example-velero'
+        self.__test_env = {
+            'source': 'upstream',
+            'velero_ns': 'velero-1-12'
+        }
         self.__result_dicts = []
         self.__run_metadata = {
             "index": '',
