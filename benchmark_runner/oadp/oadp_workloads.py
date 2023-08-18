@@ -38,7 +38,7 @@ class OadpWorkloads(WorkloadsOperations):
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
         # self.__oadp_scenario_name = 'backup-restic-pvc-util-2-3-0-rbd-dd-1.1t' #backup-10pod-backup-vsm-pvc-util-minio-6g'
-        self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
+        self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-100-pods-rbd' #self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
@@ -57,7 +57,8 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_dpa = 'example-velero'
         self.__test_env = {
             'source': 'upstream',
-            'velero_ns': 'velero-1-12'
+            'velero_ns': 'velero-1-12',
+            'velero_cli_path': '/tmp/velero-1-12'
         }
         self.__result_dicts = []
         self.__run_metadata = {
@@ -190,10 +191,11 @@ class OadpWorkloads(WorkloadsOperations):
         """
         method gets oadp relevant pod details
         """
+
         velero_pod_name = self.__ssh.run(
-            cmd='oc get pods -n openshift-adp --field-selector status.phase=Running --no-headers -o custom-columns=":metadata.name" | grep velero')
+            cmd=f"oc get pods -n {self.__test_env['velero_ns']} --field-selector status.phase=Running --no-headers -o custom-columns=':metadata.name' | grep velero")
         if velero_pod_name != '':
-            get_velero_pod_details = self.__ssh.run(cmd=f"oc get pods {velero_pod_name} -n openshift-adp -o json")
+            get_velero_pod_details = self.__ssh.run(cmd=f"oc get pods {velero_pod_name} -n {self.__test_env['velero_ns']} -o json")
             data = json.loads(get_velero_pod_details)
             velero_details = {
                 "velero": {}
@@ -204,9 +206,14 @@ class OadpWorkloads(WorkloadsOperations):
                 velero_details['velero']['args'] = container['args']
                 velero_details['velero']['image'] = container['image']
                 velero_details['velero']['resources'] = container['resources']
-            get_velero_version = self.__ssh.run(
-                cmd=f"oc -n openshift-adp exec deployment/velero -c velero -it -- ./velero version | grep Version: | tail -n -1")
-            velero_version = get_velero_version.split('Version:')[1]
+            if self.__test_env['source'] == 'downstream':
+                get_velero_version = self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero version | grep Version: | tail -n -1")
+                velero_version = get_velero_version.split('Version:')[1]
+            if self.__test_env['source'] == 'upstream':
+                get_velero_version = self.__ssh.run(
+                    cmd=f"{self.__test_env['velero_cli_path']}/velero version")
+                velero_version = get_velero_version.split(':')
+                print('velero_version')
             if velero_version != '':
                 velero_details['velero']['velero_version'] = velero_version
             self.__run_metadata['summary']['env'].update(velero_details)
@@ -1481,6 +1488,39 @@ class OadpWorkloads(WorkloadsOperations):
         self.__result_dicts.append(self.__run_metadata['summary']['env'])
 
     @logger_time_stamp
+    def get_ocp_details(self):
+        """
+        Get OCP / worker details
+        """
+        cluster_details = {
+            "oadp": {}
+        }
+        jsonpath_cluster_name = "'{print $2}'"
+        cluster_name = self.__ssh.run(
+            cmd=f"oc get route/console -n openshift-console | grep -v NAME | awk {jsonpath_cluster_name}")
+        if cluster_name != '':
+            self.__run_metadata['summary']['env']['ocp']['cluster'] = cluster_name
+
+        get_ocp_version_cmd = self.__ssh.run(cmd=f"oc version | grep 'Server Version'")
+        ocp_version = get_ocp_version_cmd.split('Version:')[1]
+        if ocp_version != '':
+            self.__run_metadata['summary']['env']['ocp']['version'] = ocp_version
+
+        # get number of masters
+        get_masters_cmd = self.__ssh.run(
+            cmd="""oc get nodes -l node-role.kubernetes.io/master -o jsonpath='{.items[*].metadata.name}'""")
+        num_of_masters = len(get_masters_cmd.split(' '))
+        if num_of_masters != '':
+            self.__run_metadata['summary']['env']['ocp']['num_of_masters'] = num_of_masters
+
+        get_workers_cmd = self.__ssh.run(
+            cmd="""oc get nodes -l node-role.kubernetes.io/worker -o jsonpath='{.items[*].metadata.name}'""")
+        num_of_workers = len(get_workers_cmd.split(' '))
+        if num_of_workers != '':
+            self.__run_metadata['summary']['env']['ocp']['num_of_workers'] = num_of_workers
+
+
+    @logger_time_stamp
     def delete_oadp_custom_resources(self, ns, cr_type, cr_name):
         """
         This method can delete backup or delete cr
@@ -2091,8 +2131,20 @@ class OadpWorkloads(WorkloadsOperations):
                 self.__oadp_runtime_resource_mapping[pod_name] = f"{base_pod_name}-{count - 1}"
 
     @logger_time_stamp
-    @prometheus_metrics(yaml_full_path='/tmp/mpqe-scale-scripts/oadp-helpers/templates/metrics/metrics-oadp.yaml')
     def run_workload(self):
+       """
+       this method is for run workload of upstream code
+       """
+       # Load Scenario Details
+       test_scenario = self.load_test_scenario()
+
+       # Get OADP, Velero, Storage Details
+       self.get_ocp_details()
+       self.get_velero_details()
+       self.get_storage_details()
+
+    @prometheus_metrics(yaml_full_path='/tmp/mpqe-scale-scripts/oadp-helpers/templates/metrics/metrics-oadp.yaml')
+    def run_downstream_workload(self):
         """
         This method run oadp workload
         :return:
