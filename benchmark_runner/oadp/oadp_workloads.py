@@ -185,6 +185,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__run_metadata['summary']['env']['storage'].update(storage_details)
         self.__result_dicts.append(self.__run_metadata['summary']['env']['storage'])
         self.get_noobaa_version_details()
+        #TODO: handle minio get version details inplace of mcg
 
     @logger_time_stamp
     def get_velero_details(self):
@@ -209,13 +210,14 @@ class OadpWorkloads(WorkloadsOperations):
             if self.__test_env['source'] == 'downstream':
                 get_velero_version = self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero version | grep Version: | tail -n -1")
                 velero_version = get_velero_version.split('Version:')[1]
+                if velero_version != '':
+                    velero_details['velero']['velero_version'] = velero_version
             if self.__test_env['source'] == 'upstream':
-                get_velero_version = self.__ssh.run(
-                    cmd=f"{self.__test_env['velero_cli_path']}/velero version")
-                velero_version = get_velero_version.split(':')
-                print('velero_version')
-            if velero_version != '':
-                velero_details['velero']['velero_version'] = velero_version
+                # get_velero_version = self.__ssh.run(
+                #     cmd=f"{self.__test_env['velero_cli_path']}/velero/cmd/velero/velero version")
+                get_velero_branch = self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero; git branch")
+                velero_details['velero']['version'] = get_velero_branch.split('*')[-1].strip()
+                velero_details['velero']['hash'] = self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero; git rev-parse HEAD")
             self.__run_metadata['summary']['env'].update(velero_details)
             self.__result_dicts.append(self.__run_metadata['summary']['env'])
 
