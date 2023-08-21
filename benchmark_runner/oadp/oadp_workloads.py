@@ -2145,6 +2145,12 @@ class OadpWorkloads(WorkloadsOperations):
        self.get_velero_details()
        self.get_storage_details()
 
+       # Save test scenario run time settings run_metadata dict
+       self.__run_metadata['summary']['runtime'].update(test_scenario)
+       self.__result_dicts.append(test_scenario)
+       self.generate_elastic_index(test_scenario)
+
+
     @prometheus_metrics(yaml_full_path='/tmp/mpqe-scale-scripts/oadp-helpers/templates/metrics/metrics-oadp.yaml')
     def run_downstream_workload(self):
         """
@@ -2310,11 +2316,16 @@ class OadpWorkloads(WorkloadsOperations):
         '''
         method creates elastic index name based on test_scenario data
         '''
+        index_prefix = ''
+        if self.__test_env['source'] == 'upstream':
+            index_prefix = 'velero-'
+        else:
+            index_prefix = 'oadp-'
         if scenario['dataset']['total_namespaces'] == 1:
-            index_name = 'oadp-' + scenario['testtype'] + '-' + 'single-namespace'
+            index_name = f'{index_prefix}' + scenario['testtype'] + '-' + 'single-namespace'
         elif scenario['dataset']['total_namespaces'] > 1:
-                index_name = 'oadp-' + scenario['testtype'] + '-' + 'multi-namespace'
-        logger.info(f'index_name {index_name}')
+                index_name = f'{index_prefix}' + scenario['testtype'] + '-' + 'multi-namespace'
+        logger.info(f':: INFO :: ELK index name is: {index_name}')
         self.__run_metadata['index'] = index_name
         return index_name
 
