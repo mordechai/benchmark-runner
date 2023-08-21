@@ -1108,9 +1108,20 @@ class OadpWorkloads(WorkloadsOperations):
 
     def set_velero_log_level(self, oadp_namespace):
         """ sets velero log level """
-        json_query = """[{"op": "add", "path": "/spec/configuration/velero/logLevel", "value": "debug"}]"""
-        cmd_setting_velero_debug = self.__ssh.run(cmd=f"oc patch dataprotectionapplication example-velero -n {oadp_namespace} --type=json -p='{json_query}'")
-        logger.info(":: INFO :: Setting debug log level on velero")
+        if self.this_is_downstream():
+            json_query = """[{"op": "add", "path": "/spec/configuration/velero/logLevel", "value": "debug"}]"""
+            cmd_setting_velero_debug = self.__ssh.run(cmd=f"oc patch dataprotectionapplication example-velero -n {oadp_namespace} --type=json -p='{json_query}'")
+            logger.info(":: INFO :: Setting debug log level on velero")
+        else:
+            velero_deployment = self.get_oc_resource_to_json(resource_type='deployment', resource_name='velero', namespace=self.__test_env['velero_ns'])
+            velero_current_args = velero_deployment['spec']['template']['spec']['containers'][0]['args']
+            if 'debug' not in velero_current_args:
+                velero_current_args.append('--loglevel=debug')
+                print(f'velero_current_args: {velero_current_args}')
+                json_query = '[{"op": "replace", "path": "/spec/template/spec/containers/0/args", "value":' + f'{velero_current_args}' + '}]'
+                self.patch_oc_resource(resource_type='deployment', resource_name='velero', namespace=self.__test_env['velero_ns'],patch_type='json', patch_json=json_query)
+                logger.info(f":: INFO :: Setting debug log level on velero upstream instance in {self.__test_env['velero_ns']}")
+
 
     def config_dpa_for_cephfs_shallow(self, enable, oadp_namespace):
         """
@@ -1826,6 +1837,7 @@ class OadpWorkloads(WorkloadsOperations):
             logger.info(f"::info:: oc get {resource_type} {resource_name} -n {namespace} => Not Found")
             return {}
         else:
+            logger.info(f":: INFO :: oc get {resource_type} {resource_name} -n {namespace} returned {resources_returned} ")
             return json.loads(resources_returned)
 
     @logger_time_stamp
@@ -2132,6 +2144,13 @@ class OadpWorkloads(WorkloadsOperations):
                 self.__oadp_resources[f"{base_pod_name}-{count - 1}"] = {}
                 self.__oadp_runtime_resource_mapping[pod_name] = f"{base_pod_name}-{count - 1}"
 
+    def this_is_downstream(self):
+        """
+        helper function to return bool if its downstream
+        """
+        if self.__test_env['source'] != 'upstream':
+            return True
+
     @logger_time_stamp
     def run_workload(self):
        """
@@ -2150,6 +2169,20 @@ class OadpWorkloads(WorkloadsOperations):
        self.__result_dicts.append(test_scenario)
        self.generate_elastic_index(test_scenario)
 
+       namespace = test_scenario['args']['namespaces_to_backup']
+       target_namespace = test_scenario['args']['namespaces_to_backup']
+
+       # Verify desired storage is default storage class and volumesnapshotclass
+       expected_sc = test_scenario['dataset']['sc']
+       expected_size = test_scenario['dataset']['pv_size']
+
+       # Setup Default SC and Volume Snapshot Class
+       self.set_default_storage_class(expected_sc)
+       if self.this_is_downstream():
+           self.set_volume_snapshot_class(expected_sc, test_scenario)
+
+       # Set Velero Debug log level
+       self.set_velero_log_level(oadp_namespace=self.__test_env['velero_ns'])
 
     @prometheus_metrics(yaml_full_path='/tmp/mpqe-scale-scripts/oadp-helpers/templates/metrics/metrics-oadp.yaml')
     def run_downstream_workload(self):
