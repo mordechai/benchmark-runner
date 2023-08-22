@@ -625,7 +625,7 @@ class OadpWorkloads(WorkloadsOperations):
         try:
             time_spent_waiting_for_deletion = 0
             while (time_spent_waiting_for_deletion < 900):
-                ns_data = self.get_oc_resource_to_json(resource_type='ns', resource_name=target_namespace,namespace='openshift-adp')
+                ns_data = self.get_oc_resource_to_json(resource_type='ns', resource_name=target_namespace,namespace=self.__test_env['velero_ns'])
                 if bool(ns_data) == False:
                     logger.info(f':: info :: NS {target_namespace} deletion is completed')
                     return True
@@ -985,7 +985,7 @@ class OadpWorkloads(WorkloadsOperations):
 
 
     @logger_time_stamp
-    def get_oadp_custom_resources(self, cr_type, ns='openshift-adp'):
+    def get_custom_resources(self, cr_type, ns=self.__test_env['velero_ns']):
         """
         This method return backups as list
         :return: list of crs like backups or restore
@@ -1018,8 +1018,8 @@ class OadpWorkloads(WorkloadsOperations):
         """
         this method is for restoring oadp backups
       os  """
-        #              cmd: "oc -n openshift-adp exec deployment/velero -c velero -it -- ./velero restore create {{restore_name}}  --from-backup {{backup_name}}"
-        restore_cmd = self.__ssh.run(cmd=f'oc -n openshift-adp exec deployment/velero -c velero -it -- ./velero restore create {restore_name} --from-backup {backup_name}')
+        #              cmd: "oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero restore create {{restore_name}}  --from-backup {{backup_name}}"
+        restore_cmd = self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero restore create {restore_name} --from-backup {backup_name}")
         if restore_cmd.find('submitted successfully') == 0:
             print("Error restore was not successfully started")
             logging.error(f'Error restore did not execut stdout {restore_cmd}')
@@ -1031,13 +1031,13 @@ class OadpWorkloads(WorkloadsOperations):
         """
         if plugin == 'restic':
             backup_cmd = self.__ssh.run(
-                cmd=f'oc -n openshift-adp exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --default-volumes-to-fs-backup=true --snapshot-volumes=false')
+                cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --default-volumes-to-fs-backup=true --snapshot-volumes=false")
             if backup_cmd.find('submitted successfully') == 0:
                 print("Error backup attempt failed !!! ")
                 logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
         if plugin == 'csi' or plugin == 'vsm':
             backup_cmd = self.__ssh.run(
-                cmd=f'oc -n openshift-adp exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup}')
+                cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup}")
             if backup_cmd.find('submitted successfully') == 0:
                 print("Error backup attempt failed !!! ")
                 logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
@@ -1047,15 +1047,15 @@ class OadpWorkloads(WorkloadsOperations):
         """
         method polls for condition of OADP CR
         """
-        if not self.is_oadp_cr_present(ns='openshift-adp', cr_type=cr_type, cr_name=cr_name):
+        if not self.is_cr_present(ns=self.__test_env['velero_ns'], cr_type=cr_type, cr_name=cr_name):
             logger.info(f'{cr_name} OADPWaitForConditionTimeout raised an exception in is_oadp_cr_present returned false')
         jsonpath = "'{.status.phase}'"
-        get_state = self.__ssh.run(cmd=f"oc get {cr_type}/{cr_name} -n openshift-adp -o jsonpath={jsonpath}")
+        get_state = self.__ssh.run(cmd=f"oc get {cr_type}/{cr_name} -n {self.__test_env['velero_ns']} -o jsonpath={jsonpath}")
         try:
             current_wait_time = 0
             while current_wait_time <= testcase_timeout:
                 state = self.__ssh.run(
-                    cmd=f"oc get {cr_type}/{cr_name} -n openshift-adp -o jsonpath={jsonpath}")
+                    cmd=f"oc get {cr_type}/{cr_name} -n {self.__test_env['velero_ns']} -o jsonpath={jsonpath}")
                 if state in ['Completed', 'Failed', 'PartiallyFailed', 'Deleted' ]:
                     logger.info(f"::: INFO ::: wait_for_condition_of_oadp_cr: CR current status: of {cr_name} state: {state} in ['Completed', 'Failed', 'PartiallyFailed']")
                     return True
@@ -1071,11 +1071,11 @@ class OadpWorkloads(WorkloadsOperations):
 
 
     @logger_time_stamp
-    def is_oadp_cr_present(self, ns, cr_type, cr_name):
+    def is_cr_present(self, ns, cr_type, cr_name):
         """
         This method returns true or false regarding CR presence
         """
-        list_of_crs = self.get_oadp_custom_resources(cr_type, ns)
+        list_of_crs = self.get_custom_resources(cr_type, ns)
         if cr_name in list_of_crs:
             return True
         else:
@@ -1236,7 +1236,7 @@ class OadpWorkloads(WorkloadsOperations):
         3) disabple restic plugin
         4) Set SC
         5) enable_vsm_plugin
-        6) patch dataprotectionapplication example-velero -n openshift-adp --type=json -p='[{"op": "replace", "path": "/spec/backupLocations/0/velero/config/s3Url", "value": "http://s3-openshift-storage.apps.cloud20.rdu2.scalelab.redhat.com"}]'
+        6) patch dataprotectionapplication example-velero -n {self.__test_env['velero_ns']} --type=json -p='[{"op": "replace", "path": "/spec/backupLocations/0/velero/config/s3Url", "value": "http://s3-openshift-storage.apps.cloud20.rdu2.scalelab.redhat.com"}]'
         """
         # Get DPA contents
         dpa_data = self.get_oc_resource_to_json(resource_type='dpa', resource_name=self.__oadp_dpa, namespace=oadp_namespace)
@@ -1256,7 +1256,7 @@ class OadpWorkloads(WorkloadsOperations):
             else:
                 logger.info(':: INFO :: Restic Secret created successfully')
         # patch restic-secret to dpa
-        self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace='openshift-adp', patch_type='merge', patch_json='{"spec": {"features": {"dataMover": {"credentialName": "restic-secret"}}}}')
+        self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=self.__test_env['velero_ns'], patch_type='merge', patch_json='{"spec": {"features": {"dataMover": {"credentialName": "restic-secret"}}}}')
         #  Enable datamover / VSM
         if is_restic_enabled:
             # disabple restic plugin
@@ -1355,11 +1355,11 @@ class OadpWorkloads(WorkloadsOperations):
         if scenario['args']['plugin'] == 'vsm':
             query = '{"deletionPolicy": "Retain"}'
             logger.info(f"::INFO:: Attempting to set deletion policy of scale-volumesnapshotclass to {query}")
-            self.patch_oc_resource(resource_type='volumesnapshotclass', resource_name='scale-volumesnapshotclass', namespace='openshift-adp',patch_type='merge',patch_json=query)
+            self.patch_oc_resource(resource_type='volumesnapshotclass', resource_name='scale-volumesnapshotclass', namespace=self.__test_env['velero_ns'],patch_type='merge',patch_json=query)
         else:
             query = '{"deletionPolicy": "Delete"}'
             logger.info(f"::INFO:: Attempting to set deletion policy of scale-volumesnapshotclass to {query}")
-            self.patch_oc_resource(resource_type='volumesnapshotclass', resource_name='scale-volumesnapshotclass',namespace='openshift-adp', patch_type='merge', patch_json=query)
+            self.patch_oc_resource(resource_type='volumesnapshotclass', resource_name='scale-volumesnapshotclass',namespace=self.__test_env['velero_ns'], patch_type='merge', patch_json=query)
 
     @logger_time_stamp
     def set_default_storage_class(self,sc):
@@ -1429,7 +1429,7 @@ class OadpWorkloads(WorkloadsOperations):
             oadp_csv: oc get deployments --all-namespaces --field-selector='metadata.name=openshift-adp-controller-manager' --output=jsonpath='{.items[0].metadata.labels.olm\\.owner}'
             oadp_csv_creation_on: oc get -n openshift-adp csv -o=jsonpath='{.items[0].metadata.annotations.createdAt}'
                 # note the following var requires output of oadp_csv to be inserted at oadp-operator-v1.1.1 value
-            oadp_subscription_used: oc get subscription.operators.coreos.com --namespace='openshift-adp' --output=jsonpath='{.items[?(@.status.installedCSV == "oadp-operator.v1.1.1")].metadata.name}'
+            oadp_subscription_used: oc get subscription.operators.coreos.com --namespace=self.__test_env['velero_ns'] --output=jsonpath='{.items[?(@.status.installedCSV == "oadp-operator.v1.1.1")].metadata.name}'
         """
         oadp_details = {
             "oadp": {}
@@ -1437,31 +1437,31 @@ class OadpWorkloads(WorkloadsOperations):
 
         jsonpath_oadp_operator_container_image = "'{.spec.template.spec.containers[0].image}'"
         oadp_operator_container_image = self.__ssh.run(
-            cmd=f"oc get deployment openshift-adp-controller-manager --namespace=openshift-adp -o jsonpath={jsonpath_oadp_operator_container_image}")
+            cmd=f"oc get deployment openshift-adp-controller-manager --namespace={self.__test_env['velero_ns']} -o jsonpath={jsonpath_oadp_operator_container_image}")
         if oadp_operator_container_image != '':
             oadp_details['oadp']['oadp_operator_container_image'] = oadp_operator_container_image
 
         jsonpath_oadp_csv = "'{.items[0].metadata.labels.olm\.owner}'"
         oadp_csv = self.__ssh.run(
-            cmd=f"oc get deployments --all-namespaces --field-selector='metadata.name=openshift-adp-controller-manager' -o jsonpath={jsonpath_oadp_csv}")
+            cmd=f"oc get deployments --all-namespaces --field-selector='metadata.name={self.__test_env['velero_ns']}-controller-manager' -o jsonpath={jsonpath_oadp_csv}")
         if oadp_csv != '':
             oadp_details['oadp']['oadp_csv'] = oadp_csv
 
         jsonpath_oadp_csv_creation_time = "'{.items[0].metadata.annotations.createdAt}'"
         oadp_csv_creation_time = self.__ssh.run(
-            cmd=f"oc get -n openshift-adp csv  -o jsonpath={jsonpath_oadp_csv_creation_time}")
+            cmd=f"oc get -n {self.__test_env['velero_ns']} csv  -o jsonpath={jsonpath_oadp_csv_creation_time}")
         if oadp_csv_creation_time != '':
             oadp_details['oadp']['oadp_csv_creation_time'] = oadp_csv_creation_time.split('.')[0]
 
         jsonpath_oadp_subscription_used = "{.items[?(@.status.installedCSV == " + f'"{oadp_csv}"' + ")].metadata.name}"
         oadp_subscription_used = self.__ssh.run(
-            cmd=f"oc get subscription.operators.coreos.com --namespace='openshift-adp' -o jsonpath='{jsonpath_oadp_subscription_used}'")
+            cmd=f"oc get subscription.operators.coreos.com --namespace=self.__test_env['velero_ns'] -o jsonpath='{jsonpath_oadp_subscription_used}'")
         if oadp_subscription_used != '':
             oadp_details['oadp']['subscription'] = oadp_subscription_used
 
         jsonpath_oadp_catalog_source = "'{.spec.source}'"
         oadp_catalog_source = self.__ssh.run(
-            cmd=f"oc get subscription.operators.coreos.com {oadp_subscription_used} --namespace='openshift-adp' -o jsonpath={jsonpath_oadp_catalog_source}")
+            cmd=f"oc get subscription.operators.coreos.com {oadp_subscription_used} --namespace=self.__test_env['velero_ns'] -o jsonpath={jsonpath_oadp_catalog_source}")
         if oadp_catalog_source != '':
             oadp_details['oadp']['catalog_source'] = oadp_catalog_source
             #get iib here
@@ -1541,7 +1541,7 @@ class OadpWorkloads(WorkloadsOperations):
         """
         self.oadp_timer(action="start", transaction_name='Delete existing OADP CR')
         if cr_name == '*':
-            list_of_crs_to_delete = self.get_oadp_custom_resources(cr_type, ns)
+            list_of_crs_to_delete = self.get_custom_resources(cr_type, ns)
             if len(list_of_crs_to_delete) > 0:
                 for i in range(len(list_of_crs_to_delete)):
                     del_cmd = self.__ssh.run(
@@ -1561,11 +1561,11 @@ class OadpWorkloads(WorkloadsOperations):
         self.oadp_timer(action="stop", transaction_name='Delete existing OADP CR')
         # poll for deletion
         try:
-            is_cr_present = self.is_oadp_cr_present(ns=ns, cr_type=cr_type, cr_name=cr_name)
+            is_cr_present = self.is_cr_present(ns=ns, cr_type=cr_type, cr_name=cr_name)
             if is_cr_present:
                 time_spent_waiting_for_deletion = 0
                 while (time_spent_waiting_for_deletion < 900):
-                    is_cr_present = self.is_oadp_cr_present(ns=ns, cr_type=cr_type, cr_name=cr_name)
+                    is_cr_present = self.is_cr_present(ns=ns, cr_type=cr_type, cr_name=cr_name)
                     if is_cr_present:
                         cr_data = self.get_oc_resource_to_json(resource_type=ns, resource_name=target_namespace,namespace=default)
                         if bool(cr_data) == False:
@@ -1612,7 +1612,7 @@ class OadpWorkloads(WorkloadsOperations):
         CR status, kind, itemsBackedUp, itemsRestored, totalItems, Cloud, startTimestamp, completionTimestamp, dyration
         """
         # verify CR exists
-        oadp_cr_already_present = self.is_oadp_cr_present(ns=ns, cr_type=cr_type, cr_name=cr_name)
+        oadp_cr_already_present = self.is_cr_present(ns=ns, cr_type=cr_type, cr_name=cr_name)
         if not oadp_cr_already_present:
             # todo Throw exception and fail test
             print(f"Warning no matching cr {cr_name} of type: {cr_type} was found")
@@ -1950,13 +1950,13 @@ class OadpWorkloads(WorkloadsOperations):
         cr_type = scenario['args']['OADP_CR_TYPE']
         cr_name = scenario['args']['OADP_CR_NAME']
         jsonpath = "'{.status.errors}'"
-        error_count = self.__ssh.run(cmd=f"oc get {cr_type}/{cr_name} -n openshift-adp -o jsonpath={jsonpath}")
+        error_count = self.__ssh.run(cmd=f"oc get {cr_type}/{cr_name} -n {self.__test_env['velero_ns']} -o jsonpath={jsonpath}")
         if error_count != '' and 'Error' not in error_count and int(error_count) > 0:
             oadp_velero_log = os.path.join(self._run_artifacts_path, f'{cr_name}-error-and-warning-summary.log')
-            warnings_and_errors = self.__ssh.run(cmd=f"oc -n openshift-adp exec deployment/velero -c velero -it -- ./velero {cr_type} logs {cr_name} --insecure-skip-tls-verify | grep 'warn\|error\|critical\|exception'")
+            warnings_and_errors = self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero {cr_type} logs {cr_name} --insecure-skip-tls-verify | grep 'warn\|error\|critical\|exception'")
             logger.info(f":: INFO ::  validate_oadp_cr :: reports the following {error_count} errors and warnings for {cr_name} ")
             logger.warn(f":: WARN ::  {cr_name} log showed: ")
-            self.__ssh.run(cmd=f"oc -n openshift-adp exec deployment/velero -c velero -it -- ./velero {cr_type} logs {cr_name} --insecure-skip-tls-verify | grep 'warn\|error\|critical\|exception' >> {oadp_velero_log}")
+            self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero {cr_type} logs {cr_name} --insecure-skip-tls-verify | grep 'warn\|error\|critical\|exception' >> {oadp_velero_log}")
 
 
 
@@ -1968,11 +1968,11 @@ class OadpWorkloads(WorkloadsOperations):
         """
         oadp_cr_log = os.path.join(self._run_artifacts_path, 'oadp-cr.json')
         oadp_velero_log = os.path.join(self._run_artifacts_path, 'oadp-velero.log')
-        self.__ssh.run(cmd=f'oc -n openshift-adp exec deployment/velero -c velero -it -- ./velero {cr_type} logs {cr_name} --insecure-skip-tls-verify >> {oadp_velero_log}')
+        self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero {cr_type} logs {cr_name} --insecure-skip-tls-verify >> {oadp_velero_log}")
         if os.path.exists(os.path.join(oadp_velero_log)) or os.stat(oadp_velero_log).st_size == 0:
             #todo warn file artifact creation had an issue
             logger.warn(f'oadp_velero_log is either not present or empty check file path: {oadp_velero_log}')
-        self.__ssh.run(cmd=f"oc get {cr_type} {cr_name} -n openshift-adp -o json >> {oadp_cr_log}")
+        self.__ssh.run(cmd=f"oc get {cr_type} {cr_name} -n {self.__test_env['velero_ns']} -o json >> {oadp_cr_log}")
 
         if os.path.exists(os.path.join(oadp_cr_log)) or os.stat(oadp_cr_log).st_size == 0:
             #todo warn file artifact creation had an issue
@@ -2214,14 +2214,63 @@ class OadpWorkloads(WorkloadsOperations):
                # todo Add logic for existingResourcePolicy OADP-1184 which requires existingResourcePolicy: Update to be set in Restore CR
 
        # Check if OADP CR name is present if so remove it
-       oadp_cr_already_present = self.is_oadp_cr_present(ns='openshift-adp',
-                                                         cr_type=test_scenario['args']['OADP_CR_TYPE'],
-                                                         cr_name=test_scenario['args']['OADP_CR_NAME'])
+       oadp_cr_already_present = self.is_cr_present(ns=self.__test_env['velero_ns'], cr_type=test_scenario['args']['OADP_CR_TYPE'],
+                                                    cr_name=test_scenario['args']['OADP_CR_NAME'])
        if oadp_cr_already_present:
            logger.warn(
                f"You are attempting to use CR name: {test_scenario['args']['OADP_CR_NAME']} which is already present so it will be deleted")
-           self.delete_oadp_custom_resources(ns='openshift-adp', cr_type=test_scenario['args']['OADP_CR_TYPE'],
+           self.delete_oadp_custom_resources(ns=self.__test_env['velero_ns'], cr_type=test_scenario['args']['OADP_CR_TYPE'],
                                              cr_name=test_scenario['args']['OADP_CR_NAME'])
+
+       # Get Node and Pod Resource prior to test
+       self.collect_all_node_resource()
+       self.get_resources_per_ns(namespace=self.__test_env['velero_ns'], label="start")
+
+       # # Launch OADP scenario
+       self.oadp_execute_scenario(test_scenario, run_method='python')
+       #
+       # # Get Pod Resource after the test
+       # self.collect_all_node_resource()
+       # self.get_resources_per_ns(namespace=self.__test_env['velero_ns'], label="end")
+       #
+       # # Parse result CR for status, and timestamps
+       # self.parse_oadp_cr(ns=self.__test_env['velero_ns'], cr_type=test_scenario['args']['OADP_CR_TYPE'],
+       #                    cr_name=test_scenario['args']['OADP_CR_NAME'])
+       # self.check_oadp_cr_for_errors_and_warns(scenario=test_scenario)
+       # self.get_oadp_velero_and_cr_log(cr_name=test_scenario['args']['OADP_CR_NAME'],
+       #                                 cr_type=test_scenario['args']['OADP_CR_TYPE'])
+       # self.get_logs_by_pod_ns(namespace=self.__test_env['velero_ns'])
+       #
+       # # Post Run Validations
+       # #    check for pod restarts / cluster operator status
+       # self.verify_pod_restarts(self.__test_env['velero_ns'])
+       # self.verify_cluster_operators_status()
+       #
+       # # Set Run Status
+       # self.set_run_status()
+       # self.create_json_summary()
+       #
+       # # Post Run Cleanup
+       # self.cleaning_up_oadp_resources(scenario=test_scenario)
+       #
+       # if os.path.exists(os.path.join(self.__result_report)) and not os.stat(self.__result_report).st_size == 0:
+       #     self.__ssh.run(cmd=f'cp {self.__result_report} {self._run_artifacts_path}')
+       #     return True
+       # else:
+       #     result_report_json_data = {}
+       #     result_report_json_data['result'] = 'Failed'
+       #     result_report_json_data['run_artifacts_url'] = os.path.join(self._run_artifacts_url,
+       #                                                                 f'{self._get_run_artifacts_hierarchy(workload_name=self._workload, is_file=True)}-{self._time_stamp_format}.tar.gz')
+       #     # if self._run_type == 'test_ci':
+       #     #     index = f'oadp-metadata-test-ci-results'
+       #     # elif self._run_type == 'release':
+       #     #     index = f'oadp-metadata-release-results'
+       #     # else:
+       #     #     index = f'oadp-metadata-results'
+       #     index = self.generate_elastic_index(test_scenario)
+       #     logger.info(f'upload index: {index}')
+       #     self._es_operations.upload_to_elasticsearch(index=index, data=result_report_json_data)
+       #     raise MissingResultReport()
 
     @prometheus_metrics(yaml_full_path='/tmp/mpqe-scale-scripts/oadp-helpers/templates/metrics/metrics-oadp.yaml')
     def run_downstream_workload(self):
@@ -2255,24 +2304,24 @@ class OadpWorkloads(WorkloadsOperations):
         self.set_volume_snapshot_class(expected_sc,test_scenario)
 
         # Set Velero Debug log level
-        self.set_velero_log_level(oadp_namespace='openshift-adp')
+        self.set_velero_log_level(oadp_namespace=self.__test_env['velero_ns'])
 
         # Setup Datamover if needed
         if test_scenario['args']['plugin'] == 'vsm':
-            if self.is_datamover_enabled(oadp_namespace='openshift-adp', scenario=test_scenario) == False:
-                self.enable_datamover(oadp_namespace='openshift-adp', scenario=test_scenario)
-                self.config_datamover(oadp_namespace='openshift-adp', scenario=test_scenario)
+            if self.is_datamover_enabled(oadp_namespace=self.__test_env['velero_ns'], scenario=test_scenario) == False:
+                self.enable_datamover(oadp_namespace=self.__test_env['velero_ns'], scenario=test_scenario)
+                self.config_datamover(oadp_namespace=self.__test_env['velero_ns'], scenario=test_scenario)
                 if expected_sc == 'ocs-storagecluster-cephfs-shallow':
-                    self.config_dpa_for_cephfs_shallow(enable=True,oadp_namespace='openshift-adp')
+                    self.config_dpa_for_cephfs_shallow(enable=True,oadp_namespace=self.__test_env['velero_ns'])
                 else:
-                    self.config_dpa_for_cephfs_shallow(enable=False,oadp_namespace='openshift-adp')
+                    self.config_dpa_for_cephfs_shallow(enable=False,oadp_namespace=self.__test_env['velero_ns'])
             else:
-                self.config_dpa_for_cephfs_shallow(enable=False, oadp_namespace='openshift-adp')
+                self.config_dpa_for_cephfs_shallow(enable=False, oadp_namespace=self.__test_env['velero_ns'])
         else:
             # disable datamover / verify cephfs-shallow isnt set in dpa
-            self.config_dpa_for_cephfs_shallow(enable=False,oadp_namespace='openshift-adp')
-            if self.is_datamover_enabled(oadp_namespace='openshift-adp', scenario=test_scenario) == True:
-                self.disable_datamover(oadp_namespace='openshift-adp')
+            self.config_dpa_for_cephfs_shallow(enable=False,oadp_namespace=self.__test_env['velero_ns'])
+            if self.is_datamover_enabled(oadp_namespace=self.__test_env['velero_ns'], scenario=test_scenario) == True:
+                self.disable_datamover(oadp_namespace=self.__test_env['velero_ns'])
 
         # when performing backup
         # Check if source namespace aka our dataset is preseent, if dataset not prsent then create it
@@ -2301,35 +2350,34 @@ class OadpWorkloads(WorkloadsOperations):
                 # todo Add logic for existingResourcePolicy OADP-1184 which requires existingResourcePolicy: Update to be set in Restore CR
 
         # Check if OADP CR name is present if so remove it
-        oadp_cr_already_present = self.is_oadp_cr_present(ns='openshift-adp',
-                                                          cr_type=test_scenario['args']['OADP_CR_TYPE'],
-                                                          cr_name=test_scenario['args']['OADP_CR_NAME'])
+        oadp_cr_already_present = self.is_cr_present(ns=self.__test_env['velero_ns'], cr_type=test_scenario['args']['OADP_CR_TYPE'],
+                                                     cr_name=test_scenario['args']['OADP_CR_NAME'])
         if oadp_cr_already_present:
             logger.warn(f"You are attempting to use CR name: {test_scenario['args']['OADP_CR_NAME']} which is already present so it will be deleted")
-            self.delete_oadp_custom_resources(ns='openshift-adp', cr_type=test_scenario['args']['OADP_CR_TYPE'], cr_name=test_scenario['args']['OADP_CR_NAME'])
+            self.delete_oadp_custom_resources(ns=self.__test_env['velero_ns'], cr_type=test_scenario['args']['OADP_CR_TYPE'], cr_name=test_scenario['args']['OADP_CR_NAME'])
 
         # Get Node and Pod Resource prior to test
         self.collect_all_node_resource()
-        self.get_resources_per_ns(namespace='openshift-adp', label="start")
+        self.get_resources_per_ns(namespace=self.__test_env['velero_ns'], label="start")
 
         # Launch OADP scenario
         self.oadp_execute_scenario(test_scenario, run_method='python')
 
         # Get Pod Resource after the test
         self.collect_all_node_resource()
-        self.get_resources_per_ns(namespace='openshift-adp', label="end")
+        self.get_resources_per_ns(namespace=self.__test_env['velero_ns'], label="end")
 
         # Parse result CR for status, and timestamps
-        self.parse_oadp_cr(ns='openshift-adp', cr_type=test_scenario['args']['OADP_CR_TYPE'],
+        self.parse_oadp_cr(ns=self.__test_env['velero_ns'], cr_type=test_scenario['args']['OADP_CR_TYPE'],
                            cr_name=test_scenario['args']['OADP_CR_NAME'])
         self.check_oadp_cr_for_errors_and_warns(scenario=test_scenario)
         self.get_oadp_velero_and_cr_log(cr_name=test_scenario['args']['OADP_CR_NAME'],
                                         cr_type=test_scenario['args']['OADP_CR_TYPE'])
-        self.get_logs_by_pod_ns(namespace='openshift-adp')
+        self.get_logs_by_pod_ns(namespace=self.__test_env['velero_ns'])
 
         # Post Run Validations
         #    check for pod restarts / cluster operator status
-        self.verify_pod_restarts('openshift-adp')
+        self.verify_pod_restarts(self.__test_env['velero_ns'])
         self.verify_cluster_operators_status()
 
         # Set Run Status
@@ -2366,14 +2414,14 @@ class OadpWorkloads(WorkloadsOperations):
         if self.__oadp_cleanup_cr_post_run:
             if 'restore' == scenario['testtype']:
                 logger.info(f"*** Attempting post run: clean up for {scenario['args']['OADP_CR_NAME']} that is a {scenario['testtype']} relevant CRs to remove are: restore: {scenario['args']['OADP_CR_NAME']} & relevant CRs related backup CR: {scenario['args']['backup_name']} ")
-                self.delete_oadp_custom_resources( ns='openshift-adp', cr_type=scenario['args']['OADP_CR_TYPE'], cr_name=scenario['args']['OADP_CR_NAME'])
-                self.delete_oadp_custom_resources(ns='openshift-adp', cr_type='backup', cr_name=scenario['args']['backup_name'])
-                self.clean_s3_bucket(scenario=scenario, oadp_namespace='openshift-adp')
+                self.delete_oadp_custom_resources( ns=self.__test_env['velero_ns'], cr_type=scenario['args']['OADP_CR_TYPE'], cr_name=scenario['args']['OADP_CR_NAME'])
+                self.delete_oadp_custom_resources(ns=self.__test_env['velero_ns'], cr_type='backup', cr_name=scenario['args']['backup_name'])
+                self.clean_s3_bucket(scenario=scenario, oadp_namespace=self.__test_env['velero_ns'])
                 self.delete_vsc(scenario=scenario, ns_scoped=False)
                 self.clean_odf_pool(scenario=scenario)
             if 'backup' == scenario['testtype']:
                 logger.info(f"*** Attempting post run: clean up for {scenario['args']['OADP_CR_NAME']} that is a {scenario['testtype']} relevant CRs to remove are: {scenario['args']['OADP_CR_NAME']}")
-                self.delete_oadp_custom_resources('openshift-adp',cr_type=scenario['args']['OADP_CR_TYPE'],cr_name=scenario['args']['OADP_CR_NAME'])
+                self.delete_oadp_custom_resources(self.__test_env['velero_ns'],cr_type=scenario['args']['OADP_CR_TYPE'],cr_name=scenario['args']['OADP_CR_NAME'])
         else:
             logger.info(f'*** Skipping post run cleaning up of OADP CR *** as self.__oadp_cleanup_cr_post_run: {self.__oadp_cleanup_cr_post_run}')
         if self.__oadp_cleanup_dataset_post_run:
@@ -2389,20 +2437,20 @@ class OadpWorkloads(WorkloadsOperations):
         """
         if self.this_is_downstream():
             if test_scenario['args']['plugin'] == 'vsm':
-                if self.is_datamover_enabled(oadp_namespace='openshift-adp', scenario=test_scenario) == False:
-                    self.enable_datamover(oadp_namespace='openshift-adp', scenario=test_scenario)
-                    self.config_datamover(oadp_namespace='openshift-adp', scenario=test_scenario)
+                if self.is_datamover_enabled(oadp_namespace=self.__test_env['velero_ns'], scenario=test_scenario) == False:
+                    self.enable_datamover(oadp_namespace=self.__test_env['velero_ns'], scenario=test_scenario)
+                    self.config_datamover(oadp_namespace=self.__test_env['velero_ns'], scenario=test_scenario)
                     if expected_sc == 'ocs-storagecluster-cephfs-shallow':
-                        self.config_dpa_for_cephfs_shallow(enable=True, oadp_namespace='openshift-adp')
+                        self.config_dpa_for_cephfs_shallow(enable=True, oadp_namespace=self.__test_env['velero_ns'])
                     else:
-                        self.config_dpa_for_cephfs_shallow(enable=False, oadp_namespace='openshift-adp')
+                        self.config_dpa_for_cephfs_shallow(enable=False, oadp_namespace=self.__test_env['velero_ns'])
                 else:
-                    self.config_dpa_for_cephfs_shallow(enable=False, oadp_namespace='openshift-adp')
+                    self.config_dpa_for_cephfs_shallow(enable=False, oadp_namespace=self.__test_env['velero_ns'])
             else:
                 # disable datamover / verify cephfs-shallow isnt set in dpa
-                self.config_dpa_for_cephfs_shallow(enable=False, oadp_namespace='openshift-adp')
-                if self.is_datamover_enabled(oadp_namespace='openshift-adp', scenario=test_scenario) == True:
-                    self.disable_datamover(oadp_namespace='openshift-adp')
+                self.config_dpa_for_cephfs_shallow(enable=False, oadp_namespace=self.__test_env['velero_ns'])
+                if self.is_datamover_enabled(oadp_namespace=self.__test_env['velero_ns'], scenario=test_scenario) == True:
+                    self.disable_datamover(oadp_namespace=self.__test_env['velero_ns'])
 
     @logger_time_stamp
     def generate_elastic_index(self, scenario):
