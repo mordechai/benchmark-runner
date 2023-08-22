@@ -985,7 +985,7 @@ class OadpWorkloads(WorkloadsOperations):
 
 
     @logger_time_stamp
-    def get_custom_resources(self, cr_type, ns=self.__test_env['velero_ns']):
+    def get_custom_resources(self, cr_type, ns):
         """
         This method return backups as list
         :return: list of crs like backups or restore
@@ -1014,36 +1014,61 @@ class OadpWorkloads(WorkloadsOperations):
 
 
     @logger_time_stamp
-    def oadp_restore(self, plugin, restore_name, backup_name):
+    def exec_restore(self, plugin, restore_name, backup_name):
         """
         this method is for restoring oadp backups
       os  """
         #              cmd: "oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero restore create {{restore_name}}  --from-backup {{backup_name}}"
-        restore_cmd = self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero restore create {restore_name} --from-backup {backup_name}")
+        if self.__test_env['source'] != 'upstream':
+            restore_cmd = self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero restore create {restore_name} --from-backup {backup_name} -n {self.__test_env['velero_ns']}")
+        if self.__test_env['source'] == 'upstream':
+            restore_cmd = self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero restore create {restore_name} --from-backup {backup_name} -n {self.__test_env['velero_ns']}")
         if restore_cmd.find('submitted successfully') == 0:
             print("Error restore was not successfully started")
             logging.error(f'Error restore did not execut stdout {restore_cmd}')
 
     @logger_time_stamp
-    def oadp_create_backup(self, plugin, backup_name, namespaces_to_backup):
+    def exec_backup(self, plugin, backup_name, namespaces_to_backup):
         """
         this method is for testing oadp backup
         """
-        if plugin == 'restic':
-            backup_cmd = self.__ssh.run(
-                cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --default-volumes-to-fs-backup=true --snapshot-volumes=false")
-            if backup_cmd.find('submitted successfully') == 0:
-                print("Error backup attempt failed !!! ")
-                logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
-        if plugin == 'csi' or plugin == 'vsm':
-            backup_cmd = self.__ssh.run(
-                cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup}")
-            if backup_cmd.find('submitted successfully') == 0:
-                print("Error backup attempt failed !!! ")
-                logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
+        if self.__test_env['source'] != 'upstream':
+            if plugin == 'restic':
+                backup_cmd = self.__ssh.run(
+                    cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --default-volumes-to-fs-backup=true --snapshot-volumes=false")
+                if backup_cmd.find('submitted successfully') == 0:
+                    print("Error backup attempt failed !!! ")
+                    logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
+            if plugin == 'csi' or plugin == 'vsm':
+                backup_cmd = self.__ssh.run(
+                    cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup}")
+                if backup_cmd.find('submitted successfully') == 0:
+                    print("Error backup attempt failed !!! ")
+                    logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
+
+        if self.__test_env['source'] == 'upstream':
+            working_path = self.__test_env['velero_cli_path']
+            if plugin == 'restic' or plugin == 'kopia':
+                backup_cmd = self.__ssh.run(
+                    cmd=f"cmd=cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --default-volumes-to-fs-backup=true --snapshot-volumes=false -n {self.__test_env['velero_ns']}")
+                if backup_cmd.find('submitted successfully') == 0:
+                    print("Error backup attempt failed !!! ")
+                    logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
+            if plugin == 'csi':
+                backup_cmd = self.__ssh.run(
+                    cmd=f"cmd=cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} -n {self.__test_env['velero_ns']}")
+                if backup_cmd.find('submitted successfully') == 0:
+                    print("Error backup attempt failed !!! ")
+                    logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
+            if plugin == 'vsm':
+                backup_cmd = self.__ssh.run(
+                    cmd=f"cmd=cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --data-mover 'velero' --snapshot-move-data=true -n {self.__test_env['velero_ns']}")
+                if backup_cmd.find('submitted successfully') == 0:
+                    print("Error backup attempt failed !!! ")
+                    logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
 
     @logger_time_stamp
-    def wait_for_condition_of_oadp_cr(self, cr_type, cr_name, testcase_timeout=43200):
+    def wait_for_condition_of_cr(self, cr_type, cr_name, testcase_timeout=43200):
         """
         method polls for condition of OADP CR
         """
@@ -1057,7 +1082,7 @@ class OadpWorkloads(WorkloadsOperations):
                 state = self.__ssh.run(
                     cmd=f"oc get {cr_type}/{cr_name} -n {self.__test_env['velero_ns']} -o jsonpath={jsonpath}")
                 if state in ['Completed', 'Failed', 'PartiallyFailed', 'Deleted' ]:
-                    logger.info(f"::: INFO ::: wait_for_condition_of_oadp_cr: CR current status: of {cr_name} state: {state} in ['Completed', 'Failed', 'PartiallyFailed']")
+                    logger.info(f"::: INFO ::: wait_for_condition_of_oadp_cr: CR current status: of {cr_name} state: {state} in ['Completed', 'Failed', 'PartiallyFailed', 'FinalizingPartiallyFailed', 'WaitingForPluginOperationsPartiallyFailed']")
                     return True
                 if 'Error from server' in state:
                     logger.error( f':: ERROR :: wait_for_condition_of_oadp_cr: is returning ERROR in its current status: CR {cr_name} state: {state} that should not happen')
@@ -1991,15 +2016,21 @@ class OadpWorkloads(WorkloadsOperations):
         if run_method == 'python':
             if test_scenario['args']['OADP_CR_TYPE'] == 'backup':
                 self.oadp_timer(action="start", transaction_name=f"{test_scenario['args']['OADP_CR_NAME']}")
-                self.oadp_create_backup(plugin=test_scenario['args']['plugin'], backup_name=test_scenario['args']['backup_name'], namespaces_to_backup=test_scenario['args']['namespaces_to_backup'])
-                self.wait_for_condition_of_oadp_cr(cr_type=test_scenario['args']['OADP_CR_TYPE'],
-                                                   cr_name=test_scenario['args']['OADP_CR_NAME'],
-                                                   testcase_timeout=test_scenario['args']['testcase_timeout'])
+                self.exec_backup(plugin=test_scenario['args']['plugin'],
+                                 backup_name=test_scenario['args']['backup_name'],
+                                 namespaces_to_backup=test_scenario['args']['namespaces_to_backup'])
+                self.wait_for_condition_of_cr(cr_type=test_scenario['args']['OADP_CR_TYPE'],
+                                              cr_name=test_scenario['args']['OADP_CR_NAME'],
+                                              testcase_timeout=test_scenario['args']['testcase_timeout'])
                 self.oadp_timer(action="stop", transaction_name=f"{test_scenario['args']['OADP_CR_NAME']}")
             if test_scenario['args']['OADP_CR_TYPE'] == 'restore':
                 self.oadp_timer(action="start", transaction_name=f"{test_scenario['args']['OADP_CR_NAME']}")
-                self.oadp_restore(plugin=test_scenario['args']['plugin'], restore_name=test_scenario['args']['OADP_CR_NAME'], backup_name=test_scenario['args']['backup_name'])
-                self.wait_for_condition_of_oadp_cr(cr_type=test_scenario['args']['OADP_CR_TYPE'], cr_name=test_scenario['args']['OADP_CR_NAME'], testcase_timeout=test_scenario['args']['testcase_timeout'])
+                self.exec_restore(plugin=test_scenario['args']['plugin'],
+                                  restore_name=test_scenario['args']['OADP_CR_NAME'],
+                                  backup_name=test_scenario['args']['backup_name'])
+                self.wait_for_condition_of_cr(cr_type=test_scenario['args']['OADP_CR_TYPE'],
+                                              cr_name=test_scenario['args']['OADP_CR_NAME'],
+                                              testcase_timeout=test_scenario['args']['testcase_timeout'])
                 self.oadp_timer(action="stop", transaction_name=f"{test_scenario['args']['OADP_CR_NAME']}")
                 dataset_restored_as_expected = self.validate_dataset(test_scenario)
                 self.__run_metadata['summary']['results']['dataset_post_run_validation'] = dataset_restored_as_expected
@@ -2228,15 +2259,15 @@ class OadpWorkloads(WorkloadsOperations):
 
        # # Launch OADP scenario
        self.oadp_execute_scenario(test_scenario, run_method='python')
-       #
-       # # Get Pod Resource after the test
-       # self.collect_all_node_resource()
-       # self.get_resources_per_ns(namespace=self.__test_env['velero_ns'], label="end")
-       #
-       # # Parse result CR for status, and timestamps
-       # self.parse_oadp_cr(ns=self.__test_env['velero_ns'], cr_type=test_scenario['args']['OADP_CR_TYPE'],
-       #                    cr_name=test_scenario['args']['OADP_CR_NAME'])
-       # self.check_oadp_cr_for_errors_and_warns(scenario=test_scenario)
+
+       # Get Pod Resource after the test
+       self.collect_all_node_resource()
+       self.get_resources_per_ns(namespace=self.__test_env['velero_ns'], label="end")
+
+       # Parse result CR for status, and timestamps
+       self.parse_oadp_cr(ns=self.__test_env['velero_ns'], cr_type=test_scenario['args']['OADP_CR_TYPE'],
+                          cr_name=test_scenario['args']['OADP_CR_NAME'])
+       self.check_oadp_cr_for_errors_and_warns(scenario=test_scenario)
        # self.get_oadp_velero_and_cr_log(cr_name=test_scenario['args']['OADP_CR_NAME'],
        #                                 cr_type=test_scenario['args']['OADP_CR_TYPE'])
        # self.get_logs_by_pod_ns(namespace=self.__test_env['velero_ns'])
