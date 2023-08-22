@@ -2184,6 +2184,10 @@ class OadpWorkloads(WorkloadsOperations):
        # Set Velero Debug log level
        self.set_velero_log_level(oadp_namespace=self.__test_env['velero_ns'])
 
+       # Setup Datamover if needed
+       self.checking_for_configurations_for_datamover()
+
+
     @prometheus_metrics(yaml_full_path='/tmp/mpqe-scale-scripts/oadp-helpers/templates/metrics/metrics-oadp.yaml')
     def run_downstream_workload(self):
         """
@@ -2343,6 +2347,27 @@ class OadpWorkloads(WorkloadsOperations):
         else:
             logger.info(f'*** Skipping post run cleaning up of OADP dataset  *** as self.__oadp_cleanup_dataset_post_run: {self.__oadp_cleanup_dataset_post_run}')
 
+
+    def checking_for_configurations_for_datamover(self):
+        """
+        method wraps datamover logic flow for setting and removing dm downstream
+        """
+        if self.this_is_downstream():
+            if test_scenario['args']['plugin'] == 'vsm':
+                if self.is_datamover_enabled(oadp_namespace='openshift-adp', scenario=test_scenario) == False:
+                    self.enable_datamover(oadp_namespace='openshift-adp', scenario=test_scenario)
+                    self.config_datamover(oadp_namespace='openshift-adp', scenario=test_scenario)
+                    if expected_sc == 'ocs-storagecluster-cephfs-shallow':
+                        self.config_dpa_for_cephfs_shallow(enable=True, oadp_namespace='openshift-adp')
+                    else:
+                        self.config_dpa_for_cephfs_shallow(enable=False, oadp_namespace='openshift-adp')
+                else:
+                    self.config_dpa_for_cephfs_shallow(enable=False, oadp_namespace='openshift-adp')
+            else:
+                # disable datamover / verify cephfs-shallow isnt set in dpa
+                self.config_dpa_for_cephfs_shallow(enable=False, oadp_namespace='openshift-adp')
+                if self.is_datamover_enabled(oadp_namespace='openshift-adp', scenario=test_scenario) == True:
+                    self.disable_datamover(oadp_namespace='openshift-adp')
 
     @logger_time_stamp
     def generate_elastic_index(self, scenario):
