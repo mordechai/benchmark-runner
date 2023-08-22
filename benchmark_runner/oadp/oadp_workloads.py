@@ -38,7 +38,7 @@ class OadpWorkloads(WorkloadsOperations):
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
         # self.__oadp_scenario_name = 'backup-restic-pvc-util-2-3-0-rbd-dd-1.1t' #backup-10pod-backup-vsm-pvc-util-minio-6g'
-        self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-100-pods-rbd' #self._environment_variables_dict.get('oadp_scenario','')
+        self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
@@ -216,8 +216,9 @@ class OadpWorkloads(WorkloadsOperations):
                 # get_velero_version = self.__ssh.run(
                 #     cmd=f"{self.__test_env['velero_cli_path']}/velero/cmd/velero/velero version")
                 get_velero_branch = self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero; git branch")
-                velero_details['velero']['version'] = get_velero_branch.split('*')[-1].strip()
-                velero_details['velero']['hash'] = self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero; git rev-parse HEAD")
+                velero_details['velero']['version'] = get_velero_branch.split('*')[-1].strip().replace('release-', '')
+                velero_details['velero']['branch'] = get_velero_branch.split('*')[-1].strip()
+                velero_details['velero']['commit'] = self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero; git rev-parse HEAD")
             self.__run_metadata['summary']['env'].update(velero_details)
             self.__result_dicts.append(self.__run_metadata['summary']['env'])
 
@@ -1081,7 +1082,7 @@ class OadpWorkloads(WorkloadsOperations):
             while current_wait_time <= testcase_timeout:
                 state = self.__ssh.run(
                     cmd=f"oc get {cr_type}/{cr_name} -n {self.__test_env['velero_ns']} -o jsonpath={jsonpath}")
-                if state in ['Completed', 'Failed', 'PartiallyFailed', 'Deleted' ]:
+                if state in ['Completed', 'Failed', 'PartiallyFailed', 'Deleted', 'FinalizingPartiallyFailed', 'WaitingForPluginOperationsPartiallyFailed' ]:
                     logger.info(f"::: INFO ::: wait_for_condition_of_oadp_cr: CR current status: of {cr_name} state: {state} in ['Completed', 'Failed', 'PartiallyFailed', 'FinalizingPartiallyFailed', 'WaitingForPluginOperationsPartiallyFailed']")
                     return True
                 if 'Error from server' in state:
@@ -1140,8 +1141,8 @@ class OadpWorkloads(WorkloadsOperations):
         else:
             velero_deployment = self.get_oc_resource_to_json(resource_type='deployment', resource_name='velero', namespace=self.__test_env['velero_ns'])
             velero_current_args = velero_deployment['spec']['template']['spec']['containers'][0]['args']
-            if '--loglevel=debug' not in velero_current_args:
-                velero_current_args.append('--loglevel=debug')
+            if '--log-level=debug' not in velero_current_args:
+                velero_current_args.append('--log-level=debug')
                 print(f'velero_current_args: {velero_current_args}')
                 json_query = '[{"op": "replace", "path": "/spec/template/spec/containers/0/args", "value":' + f'{velero_current_args}' + '}]'
                 self.patch_oc_resource(resource_type='deployment', resource_name='velero', namespace=self.__test_env['velero_ns'],patch_type='json', patch_json=json_query)
@@ -1569,14 +1570,18 @@ class OadpWorkloads(WorkloadsOperations):
             list_of_crs_to_delete = self.get_custom_resources(cr_type, ns)
             if len(list_of_crs_to_delete) > 0:
                 for i in range(len(list_of_crs_to_delete)):
-                    del_cmd = self.__ssh.run(
-                        cmd=f'oc -n {ns} exec deployment/velero -c velero -it -- ./velero {cr_type} delete {list_of_crs_to_delete[i]} --confirm')
+                    if self.__test_env['source'] == 'downstream':
+                        del_cmd = self.__ssh.run(cmd=f'oc -n {ns} exec deployment/velero -c velero -it -- ./velero {cr_type} delete {list_of_crs_to_delete[i]} --confirm')
+                    if self.__test_env['source'] == 'upstream':
+                        del_cmd = self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero {cr_type} delete {list_of_crs_to_delete[i]} --confirm -n {ns}")
                     if del_cmd.find('submitted successfully') < 0:
                         print("Error did not delete successfully")
         else:
             if cr_name != '*' and cr_name != '':
-                del_cmd = self.__ssh.run(
-                    cmd=f'oc -n {ns} exec deployment/velero -c velero -it -- ./velero {cr_type} delete {cr_name} --confirm')
+                if self.__test_env['source'] == 'downstream':
+                    del_cmd = self.__ssh.run(cmd=f'oc -n {ns} exec deployment/velero -c velero -it -- ./velero {cr_type} delete {cr_name} --confirm')
+                if self.__test_env['source'] == 'upstream':
+                    del_cmd = self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero {cr_type} delete {cr_name} --confirm -n {ns}")
                 if del_cmd != None and ('submitted successfully' in del_cmd or 'deleted' in del_cmd):
                     logger.info(f":: INFO :: OADP CR deleted by: velero {cr_type} delete {cr_name} completed successfully")
                 elif del_cmd != None and f"No {cr_type}s found" in del_cmd:
@@ -1592,7 +1597,7 @@ class OadpWorkloads(WorkloadsOperations):
                 while (time_spent_waiting_for_deletion < 900):
                     is_cr_present = self.is_cr_present(ns=ns, cr_type=cr_type, cr_name=cr_name)
                     if is_cr_present:
-                        cr_data = self.get_oc_resource_to_json(resource_type=ns, resource_name=target_namespace,namespace=default)
+                        cr_data = self.get_oc_resource_to_json(resource_type=cr_type, resource_name=cr_name,namespace=ns)
                         if bool(cr_data) == False:
                             logger.info(f':: info :: delete_oadp_custom_resources {cr_name} in {ns} deletion is completed')
                             return True
@@ -1978,10 +1983,15 @@ class OadpWorkloads(WorkloadsOperations):
         error_count = self.__ssh.run(cmd=f"oc get {cr_type}/{cr_name} -n {self.__test_env['velero_ns']} -o jsonpath={jsonpath}")
         if error_count != '' and 'Error' not in error_count and int(error_count) > 0:
             oadp_velero_log = os.path.join(self._run_artifacts_path, f'{cr_name}-error-and-warning-summary.log')
-            warnings_and_errors = self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero {cr_type} logs {cr_name} --insecure-skip-tls-verify | grep 'warn\|error\|critical\|exception'")
+            if self.__test_env['source'] == 'upstream':
+                warnings_and_errors = self.__ssh.run(
+                    cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero {cr_type} logs {cr_name} -n {self.__test_env['velero_ns']} | grep 'warn\|error\|critical\|exception'")
+                self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero {cr_type} logs {cr_name} -n {self.__test_env['velero_ns']} | grep 'warn\|error\|critical\|exception' >> {oadp_velero_log}")
+            else:
+                warnings_and_errors = self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero {cr_type} logs {cr_name} --insecure-skip-tls-verify | grep 'warn\|error\|critical\|exception'")
+                self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero {cr_type} logs {cr_name} --insecure-skip-tls-verify | grep 'warn\|error\|critical\|exception' >> {oadp_velero_log}")
             logger.info(f":: INFO ::  validate_oadp_cr :: reports the following {error_count} errors and warnings for {cr_name} ")
             logger.warn(f":: WARN ::  {cr_name} log showed: ")
-            self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero {cr_type} logs {cr_name} --insecure-skip-tls-verify | grep 'warn\|error\|critical\|exception' >> {oadp_velero_log}")
 
 
 
@@ -1993,7 +2003,10 @@ class OadpWorkloads(WorkloadsOperations):
         """
         oadp_cr_log = os.path.join(self._run_artifacts_path, 'oadp-cr.json')
         oadp_velero_log = os.path.join(self._run_artifacts_path, 'oadp-velero.log')
-        self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero {cr_type} logs {cr_name} --insecure-skip-tls-verify >> {oadp_velero_log}")
+        if self.__test_env['source'] == 'upstream':
+            self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero {cr_type} logs {cr_name} -n {self.__test_env['velero_ns']} >> {oadp_velero_log}")
+        else:
+            self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero {cr_type} logs {cr_name} --insecure-skip-tls-verify >> {oadp_velero_log}")
         if os.path.exists(os.path.join(oadp_velero_log)) or os.stat(oadp_velero_log).st_size == 0:
             #todo warn file artifact creation had an issue
             logger.warn(f'oadp_velero_log is either not present or empty check file path: {oadp_velero_log}')
@@ -2268,40 +2281,40 @@ class OadpWorkloads(WorkloadsOperations):
        self.parse_oadp_cr(ns=self.__test_env['velero_ns'], cr_type=test_scenario['args']['OADP_CR_TYPE'],
                           cr_name=test_scenario['args']['OADP_CR_NAME'])
        self.check_oadp_cr_for_errors_and_warns(scenario=test_scenario)
-       # self.get_oadp_velero_and_cr_log(cr_name=test_scenario['args']['OADP_CR_NAME'],
-       #                                 cr_type=test_scenario['args']['OADP_CR_TYPE'])
-       # self.get_logs_by_pod_ns(namespace=self.__test_env['velero_ns'])
-       #
-       # # Post Run Validations
-       # #    check for pod restarts / cluster operator status
-       # self.verify_pod_restarts(self.__test_env['velero_ns'])
-       # self.verify_cluster_operators_status()
-       #
-       # # Set Run Status
-       # self.set_run_status()
-       # self.create_json_summary()
-       #
-       # # Post Run Cleanup
-       # self.cleaning_up_oadp_resources(scenario=test_scenario)
-       #
-       # if os.path.exists(os.path.join(self.__result_report)) and not os.stat(self.__result_report).st_size == 0:
-       #     self.__ssh.run(cmd=f'cp {self.__result_report} {self._run_artifacts_path}')
-       #     return True
-       # else:
-       #     result_report_json_data = {}
-       #     result_report_json_data['result'] = 'Failed'
-       #     result_report_json_data['run_artifacts_url'] = os.path.join(self._run_artifacts_url,
-       #                                                                 f'{self._get_run_artifacts_hierarchy(workload_name=self._workload, is_file=True)}-{self._time_stamp_format}.tar.gz')
-       #     # if self._run_type == 'test_ci':
-       #     #     index = f'oadp-metadata-test-ci-results'
-       #     # elif self._run_type == 'release':
-       #     #     index = f'oadp-metadata-release-results'
-       #     # else:
-       #     #     index = f'oadp-metadata-results'
-       #     index = self.generate_elastic_index(test_scenario)
-       #     logger.info(f'upload index: {index}')
-       #     self._es_operations.upload_to_elasticsearch(index=index, data=result_report_json_data)
-       #     raise MissingResultReport()
+       self.get_oadp_velero_and_cr_log(cr_name=test_scenario['args']['OADP_CR_NAME'],
+                                       cr_type=test_scenario['args']['OADP_CR_TYPE'])
+       self.get_logs_by_pod_ns(namespace=self.__test_env['velero_ns'])
+
+       # Post Run Validations
+       #    check for pod restarts / cluster operator status
+       self.verify_pod_restarts(self.__test_env['velero_ns'])
+       self.verify_cluster_operators_status()
+
+       # Set Run Status
+       self.set_run_status()
+       self.create_json_summary()
+
+       # Post Run Cleanup
+       self.cleaning_up_oadp_resources(scenario=test_scenario)
+
+       if os.path.exists(os.path.join(self.__result_report)) and not os.stat(self.__result_report).st_size == 0:
+           self.__ssh.run(cmd=f'cp {self.__result_report} {self._run_artifacts_path}')
+           return True
+       else:
+           result_report_json_data = {}
+           result_report_json_data['result'] = 'Failed'
+           result_report_json_data['run_artifacts_url'] = os.path.join(self._run_artifacts_url,
+                                                                       f'{self._get_run_artifacts_hierarchy(workload_name=self._workload, is_file=True)}-{self._time_stamp_format}.tar.gz')
+           # if self._run_type == 'test_ci':
+           #     index = f'oadp-metadata-test-ci-results'
+           # elif self._run_type == 'release':
+           #     index = f'oadp-metadata-release-results'
+           # else:
+           #     index = f'oadp-metadata-results'
+           index = self.generate_elastic_index(test_scenario)
+           logger.info(f'upload index: {index}')
+           self._es_operations.upload_to_elasticsearch(index=index, data=result_report_json_data)
+           raise MissingResultReport()
 
     @prometheus_metrics(yaml_full_path='/tmp/mpqe-scale-scripts/oadp-helpers/templates/metrics/metrics-oadp.yaml')
     def run_downstream_workload(self):
