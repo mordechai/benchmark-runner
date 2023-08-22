@@ -703,7 +703,7 @@ class OadpWorkloads(WorkloadsOperations):
                 f"::: INFO :: busybox_dataset_creation - successfully created {num_of_assets_desired}")
 
     @logger_time_stamp
-    def create_oadp_source_dataset(self, scenario):
+    def create_source_dataset(self, scenario):
         """
         This method creates dataset for oadp to work against
         :return:
@@ -2187,6 +2187,21 @@ class OadpWorkloads(WorkloadsOperations):
        # Setup Datamover if needed
        self.checking_for_configurations_for_datamover()
 
+       # when performing backup
+       # Check if source namespace aka our dataset is preseent, if dataset not prsent then create it
+       if test_scenario['args']['OADP_CR_TYPE'] == 'backup':
+           # setting retry logic for initial dataset presence check to be quick
+           self.__retry_logic = {
+               'interval_between_checks': 15,
+               'max_attempts': 1
+           }
+           dataset_already_present = self.validate_dataset(test_scenario)
+           if not dataset_already_present:
+               self.__retry_logic = {
+                   'interval_between_checks': 15,
+                   'max_attempts': 28
+               }
+               self.create_source_dataset(test_scenario)
 
     @prometheus_metrics(yaml_full_path='/tmp/mpqe-scale-scripts/oadp-helpers/templates/metrics/metrics-oadp.yaml')
     def run_downstream_workload(self):
@@ -2253,7 +2268,7 @@ class OadpWorkloads(WorkloadsOperations):
                     'interval_between_checks': 15,
                     'max_attempts': 28
                 }
-                self.create_oadp_source_dataset(test_scenario)
+                self.create_source_dataset(test_scenario)
 
         # when performing restore
         # source dataset will be removed before restore attempt unless dataset yaml contains ['args']['existingResourcePolicy'] set to 'Update'
