@@ -611,7 +611,7 @@ class OadpWorkloads(WorkloadsOperations):
         logger.info(f"::: INFO :: delete_vsc result of command with scope of deletion ns_scoped: {ns_scoped} was {vsc_cmd}")
 
     @logger_time_stamp
-    def delete_oadp_source_dataset(self, target_namespace):
+    def delete_source_dataset(self, target_namespace):
         """
         method deletes namespaces used for original backup
         """
@@ -2203,6 +2203,26 @@ class OadpWorkloads(WorkloadsOperations):
                }
                self.create_source_dataset(test_scenario)
 
+       # when performing restore
+       # source dataset will be removed before restore attempt unless dataset yaml contains ['args']['existingResourcePolicy'] set to 'Update'
+       if test_scenario['args']['OADP_CR_TYPE'] == 'restore':
+           remove_source_dataset = test_scenario['args'].get('existingResourcePolicy', False)
+           if remove_source_dataset != 'Update':
+               self.delete_source_dataset(target_namespace=test_scenario['args']['namespaces_to_backup'])
+           elif remove_source_dataset == 'Update':
+               print('WIP: logic for existingResourcePolicy OADP-1184 wil go here')
+               # todo Add logic for existingResourcePolicy OADP-1184 which requires existingResourcePolicy: Update to be set in Restore CR
+
+       # Check if OADP CR name is present if so remove it
+       oadp_cr_already_present = self.is_oadp_cr_present(ns='openshift-adp',
+                                                         cr_type=test_scenario['args']['OADP_CR_TYPE'],
+                                                         cr_name=test_scenario['args']['OADP_CR_NAME'])
+       if oadp_cr_already_present:
+           logger.warn(
+               f"You are attempting to use CR name: {test_scenario['args']['OADP_CR_NAME']} which is already present so it will be deleted")
+           self.delete_oadp_custom_resources(ns='openshift-adp', cr_type=test_scenario['args']['OADP_CR_TYPE'],
+                                             cr_name=test_scenario['args']['OADP_CR_NAME'])
+
     @prometheus_metrics(yaml_full_path='/tmp/mpqe-scale-scripts/oadp-helpers/templates/metrics/metrics-oadp.yaml')
     def run_downstream_workload(self):
         """
@@ -2275,7 +2295,7 @@ class OadpWorkloads(WorkloadsOperations):
         if test_scenario['args']['OADP_CR_TYPE'] == 'restore':
             remove_source_dataset = test_scenario['args'].get('existingResourcePolicy', False)
             if remove_source_dataset != 'Update':
-                self.delete_oadp_source_dataset(target_namespace=test_scenario['args']['namespaces_to_backup'])
+                self.delete_source_dataset(target_namespace=test_scenario['args']['namespaces_to_backup'])
             elif remove_source_dataset == 'Update':
                 print ('WIP: logic for existingResourcePolicy OADP-1184 wil go here')
                 # todo Add logic for existingResourcePolicy OADP-1184 which requires existingResourcePolicy: Update to be set in Restore CR
@@ -2358,7 +2378,7 @@ class OadpWorkloads(WorkloadsOperations):
             logger.info(f'*** Skipping post run cleaning up of OADP CR *** as self.__oadp_cleanup_cr_post_run: {self.__oadp_cleanup_cr_post_run}')
         if self.__oadp_cleanup_dataset_post_run:
             logger.info(f'*** Attempting post run: clean up of OADP dataset *** as self.__oadp_cleanup_dataset_post_run: {self.__oadp_cleanup_dataset_post_run}')
-            self.delete_oadp_source_dataset(target_namespace=scenario['args']['namespaces_to_backup'])
+            self.delete_source_dataset(target_namespace=scenario['args']['namespaces_to_backup'])
         else:
             logger.info(f'*** Skipping post run cleaning up of OADP dataset  *** as self.__oadp_cleanup_dataset_post_run: {self.__oadp_cleanup_dataset_post_run}')
 
