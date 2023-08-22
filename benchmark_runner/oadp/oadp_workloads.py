@@ -1050,19 +1050,19 @@ class OadpWorkloads(WorkloadsOperations):
             working_path = self.__test_env['velero_cli_path']
             if plugin == 'restic' or plugin == 'kopia':
                 backup_cmd = self.__ssh.run(
-                    cmd=f"cmd=cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --default-volumes-to-fs-backup=true --snapshot-volumes=false -n {self.__test_env['velero_ns']}")
+                    cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --default-volumes-to-fs-backup=true --snapshot-volumes=false -n {self.__test_env['velero_ns']}")
                 if backup_cmd.find('submitted successfully') == 0:
                     print("Error backup attempt failed !!! ")
                     logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
             if plugin == 'csi':
                 backup_cmd = self.__ssh.run(
-                    cmd=f"cmd=cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} -n {self.__test_env['velero_ns']}")
+                    cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} -n {self.__test_env['velero_ns']}")
                 if backup_cmd.find('submitted successfully') == 0:
                     print("Error backup attempt failed !!! ")
                     logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
             if plugin == 'vsm':
                 backup_cmd = self.__ssh.run(
-                    cmd=f"cmd=cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --data-mover 'velero' --snapshot-move-data=true -n {self.__test_env['velero_ns']}")
+                    cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --data-mover 'velero' --snapshot-move-data=true -n {self.__test_env['velero_ns']}")
                 if backup_cmd.find('submitted successfully') == 0:
                     print("Error backup attempt failed !!! ")
                     logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
@@ -1140,7 +1140,7 @@ class OadpWorkloads(WorkloadsOperations):
         else:
             velero_deployment = self.get_oc_resource_to_json(resource_type='deployment', resource_name='velero', namespace=self.__test_env['velero_ns'])
             velero_current_args = velero_deployment['spec']['template']['spec']['containers'][0]['args']
-            if 'debug' not in velero_current_args:
+            if '--loglevel=debug' not in velero_current_args:
                 velero_current_args.append('--loglevel=debug')
                 print(f'velero_current_args: {velero_current_args}')
                 json_query = '[{"op": "replace", "path": "/spec/template/spec/containers/0/args", "value":' + f'{velero_current_args}' + '}]'
