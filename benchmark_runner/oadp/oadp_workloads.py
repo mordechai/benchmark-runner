@@ -38,7 +38,7 @@ class OadpWorkloads(WorkloadsOperations):
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
         # self.__oadp_scenario_name = 'backup-restic-pvc-util-2-3-0-rbd-dd-1.1t' #backup-10pod-backup-vsm-pvc-util-minio-6g'
-        self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
+        self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-100-pods-rbd' #self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
@@ -635,7 +635,7 @@ class OadpWorkloads(WorkloadsOperations):
                     time.sleep(2)
                     time_spent_waiting_for_deletion += 2
         except Exception as err:
-            logger.warn(f':: WARN :: in delete_oadp_source_dataset  raised an exception related to {cr_name} deletion attempt {err}')
+            logger.warn(f':: WARN :: in delete_source_dataset ::  raised an exception related to {target_namespace} deletion attempt {err}')
 
 
     @logger_time_stamp
@@ -2229,7 +2229,7 @@ class OadpWorkloads(WorkloadsOperations):
        self.set_velero_log_level(oadp_namespace=self.__test_env['velero_ns'])
 
        # Setup Datamover if needed
-       self.checking_for_configurations_for_datamover()
+       self.checking_for_configurations_for_datamover(test_scenario)
 
        # when performing backup
        # Check if source namespace aka our dataset is preseent, if dataset not prsent then create it
@@ -2316,139 +2316,6 @@ class OadpWorkloads(WorkloadsOperations):
            self._es_operations.upload_to_elasticsearch(index=index, data=result_report_json_data)
            raise MissingResultReport()
 
-    @prometheus_metrics(yaml_full_path='/tmp/mpqe-scale-scripts/oadp-helpers/templates/metrics/metrics-oadp.yaml')
-    def run_downstream_workload(self):
-        """
-        This method run oadp workload
-        :return:
-        """
-        # Load Scenario Details
-        test_scenario = self.load_test_scenario()
-
-
-        # Get OADP, Velero, Storage Details
-        self.oadp_get_version_info()
-        self.get_velero_details()
-        self.get_storage_details()
-
-        # Save test scenario run time settings run_metadata dict
-        self.__run_metadata['summary']['runtime'].update(test_scenario)
-        self.__result_dicts.append(test_scenario)
-        self.generate_elastic_index(test_scenario)
-
-        namespace = test_scenario['args']['namespaces_to_backup']
-        target_namespace = test_scenario['args']['namespaces_to_backup']
-
-        # Verify desired storage is default storage class and volumesnapshotclass
-        expected_sc = test_scenario['dataset']['sc']
-        expected_size = test_scenario['dataset']['pv_size']
-
-        # Setup Default SC and Volume Snapshot Class
-        self.set_default_storage_class(expected_sc)
-        self.set_volume_snapshot_class(expected_sc,test_scenario)
-
-        # Set Velero Debug log level
-        self.set_velero_log_level(oadp_namespace=self.__test_env['velero_ns'])
-
-        # Setup Datamover if needed
-        if test_scenario['args']['plugin'] == 'vsm':
-            if self.is_datamover_enabled(oadp_namespace=self.__test_env['velero_ns'], scenario=test_scenario) == False:
-                self.enable_datamover(oadp_namespace=self.__test_env['velero_ns'], scenario=test_scenario)
-                self.config_datamover(oadp_namespace=self.__test_env['velero_ns'], scenario=test_scenario)
-                if expected_sc == 'ocs-storagecluster-cephfs-shallow':
-                    self.config_dpa_for_cephfs_shallow(enable=True,oadp_namespace=self.__test_env['velero_ns'])
-                else:
-                    self.config_dpa_for_cephfs_shallow(enable=False,oadp_namespace=self.__test_env['velero_ns'])
-            else:
-                self.config_dpa_for_cephfs_shallow(enable=False, oadp_namespace=self.__test_env['velero_ns'])
-        else:
-            # disable datamover / verify cephfs-shallow isnt set in dpa
-            self.config_dpa_for_cephfs_shallow(enable=False,oadp_namespace=self.__test_env['velero_ns'])
-            if self.is_datamover_enabled(oadp_namespace=self.__test_env['velero_ns'], scenario=test_scenario) == True:
-                self.disable_datamover(oadp_namespace=self.__test_env['velero_ns'])
-
-        # when performing backup
-        # Check if source namespace aka our dataset is preseent, if dataset not prsent then create it
-        if test_scenario['args']['OADP_CR_TYPE'] == 'backup':
-            # setting retry logic for initial dataset presence check to be quick
-            self.__retry_logic = {
-                'interval_between_checks': 15,
-                'max_attempts': 1
-            }
-            dataset_already_present = self.validate_dataset(test_scenario)
-            if not dataset_already_present:
-                self.__retry_logic = {
-                    'interval_between_checks': 15,
-                    'max_attempts': 28
-                }
-                self.create_source_dataset(test_scenario)
-
-        # when performing restore
-        # source dataset will be removed before restore attempt unless dataset yaml contains ['args']['existingResourcePolicy'] set to 'Update'
-        if test_scenario['args']['OADP_CR_TYPE'] == 'restore':
-            remove_source_dataset = test_scenario['args'].get('existingResourcePolicy', False)
-            if remove_source_dataset != 'Update':
-                self.delete_source_dataset(target_namespace=test_scenario['args']['namespaces_to_backup'])
-            elif remove_source_dataset == 'Update':
-                print ('WIP: logic for existingResourcePolicy OADP-1184 wil go here')
-                # todo Add logic for existingResourcePolicy OADP-1184 which requires existingResourcePolicy: Update to be set in Restore CR
-
-        # Check if OADP CR name is present if so remove it
-        oadp_cr_already_present = self.is_cr_present(ns=self.__test_env['velero_ns'], cr_type=test_scenario['args']['OADP_CR_TYPE'],
-                                                     cr_name=test_scenario['args']['OADP_CR_NAME'])
-        if oadp_cr_already_present:
-            logger.warn(f"You are attempting to use CR name: {test_scenario['args']['OADP_CR_NAME']} which is already present so it will be deleted")
-            self.delete_oadp_custom_resources(ns=self.__test_env['velero_ns'], cr_type=test_scenario['args']['OADP_CR_TYPE'], cr_name=test_scenario['args']['OADP_CR_NAME'])
-
-        # Get Node and Pod Resource prior to test
-        self.collect_all_node_resource()
-        self.get_resources_per_ns(namespace=self.__test_env['velero_ns'], label="start")
-
-        # Launch OADP scenario
-        self.oadp_execute_scenario(test_scenario, run_method='python')
-
-        # Get Pod Resource after the test
-        self.collect_all_node_resource()
-        self.get_resources_per_ns(namespace=self.__test_env['velero_ns'], label="end")
-
-        # Parse result CR for status, and timestamps
-        self.parse_oadp_cr(ns=self.__test_env['velero_ns'], cr_type=test_scenario['args']['OADP_CR_TYPE'],
-                           cr_name=test_scenario['args']['OADP_CR_NAME'])
-        self.check_oadp_cr_for_errors_and_warns(scenario=test_scenario)
-        self.get_oadp_velero_and_cr_log(cr_name=test_scenario['args']['OADP_CR_NAME'],
-                                        cr_type=test_scenario['args']['OADP_CR_TYPE'])
-        self.get_logs_by_pod_ns(namespace=self.__test_env['velero_ns'])
-
-        # Post Run Validations
-        #    check for pod restarts / cluster operator status
-        self.verify_pod_restarts(self.__test_env['velero_ns'])
-        self.verify_cluster_operators_status()
-
-        # Set Run Status
-        self.set_run_status()
-        self.create_json_summary()
-
-        #Post Run Cleanup
-        self.cleaning_up_oadp_resources(scenario=test_scenario)
-
-        if os.path.exists(os.path.join(self.__result_report)) and not os.stat(self.__result_report).st_size == 0:
-            self.__ssh.run(cmd=f'cp {self.__result_report} {self._run_artifacts_path}')
-            return True
-        else:
-            result_report_json_data = {}
-            result_report_json_data['result'] = 'Failed'
-            result_report_json_data['run_artifacts_url'] = os.path.join(self._run_artifacts_url,
-                                                                        f'{self._get_run_artifacts_hierarchy(workload_name=self._workload, is_file=True)}-{self._time_stamp_format}.tar.gz')
-            # if self._run_type == 'test_ci':
-            #     index = f'oadp-metadata-test-ci-results'
-            # elif self._run_type == 'release':
-            #     index = f'oadp-metadata-release-results'
-            # else:
-            #     index = f'oadp-metadata-results'
-            index = self.generate_elastic_index(test_scenario)
-            logger.info(f'upload index: {index}')
-            self._es_operations.upload_to_elasticsearch(index=index, data=result_report_json_data)
-            raise MissingResultReport()
 
     @logger_time_stamp
     def cleaning_up_oadp_resources(self, scenario):
@@ -2475,7 +2342,7 @@ class OadpWorkloads(WorkloadsOperations):
             logger.info(f'*** Skipping post run cleaning up of OADP dataset  *** as self.__oadp_cleanup_dataset_post_run: {self.__oadp_cleanup_dataset_post_run}')
 
 
-    def checking_for_configurations_for_datamover(self):
+    def checking_for_configurations_for_datamover(self, test_scenario):
         """
         method wraps datamover logic flow for setting and removing dm downstream
         """
