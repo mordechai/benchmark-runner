@@ -57,7 +57,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_dpa = 'example-velero'
         self.__test_env = {
             'source': 'upstream',
-            'velero_ns': 'velero-1-12',
+            'velero_ns': 'openshift-adp',
             'velero_cli_path': '/tmp/velero-1-12'
         }
         self.__result_dicts = []
@@ -2188,6 +2188,19 @@ class OadpWorkloads(WorkloadsOperations):
                 self.__oadp_resources[f"{base_pod_name}-{count - 1}"] = {}
                 self.__oadp_runtime_resource_mapping[pod_name] = f"{base_pod_name}-{count - 1}"
 
+    def set_velero_stream_source(self):
+        """
+        method to detect whether its downstream or upstream velero
+        by checking for oadp named pod
+        """
+        check_for_oadp_pod_presence = self.__ssh.run(cmd=f"oc get pods -n {self.__test_env['velero_ns']} --field-selector status.phase=Running --no-headers -o custom-columns=':metadata.name' | grep -c 'openshift-adp-controller-manager'")
+        if check_for_oadp_pod_presence != '1':
+            self.__test_env['source'] = 'upstream'
+            logger.info(f":: INFO :: Velero namespace  {self.__test_env['velero_ns']} is upstream")
+        else:
+            self.__test_env['source'] = 'downstream'
+            logger.info(f":: INFO :: Velero namespace {self.__test_env['velero_ns']} is downstream")
+
     def this_is_downstream(self):
         """
         helper function to return bool if its downstream
@@ -2202,6 +2215,9 @@ class OadpWorkloads(WorkloadsOperations):
        """
        # Load Scenario Details
        test_scenario = self.load_test_scenario()
+
+       # Detect if were using upstream/downstream by velero ns contents
+       self.set_velero_stream_source()
 
        # Get OADP, Velero, Storage Details
        self.get_ocp_details()
