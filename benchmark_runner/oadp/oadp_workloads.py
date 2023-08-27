@@ -38,7 +38,7 @@ class OadpWorkloads(WorkloadsOperations):
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
         # self.__oadp_scenario_name = 'backup-restic-pvc-util-2-3-0-rbd-dd-1.1t' #backup-10pod-backup-vsm-pvc-util-minio-6g'
-        self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-100-pods-rbd' #self._environment_variables_dict.get('oadp_scenario','')
+        self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
@@ -2362,6 +2362,7 @@ class OadpWorkloads(WorkloadsOperations):
         """
         method wraps datamover logic flow for setting and removing dm downstream
         """
+        expected_sc = test_scenario['dataset']['sc']
         if self.this_is_downstream():
             if test_scenario['args']['plugin'] == 'vsm':
                 if self.is_datamover_enabled(oadp_namespace=self.__test_env['velero_ns'], scenario=test_scenario) == False:
