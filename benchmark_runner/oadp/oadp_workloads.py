@@ -1498,6 +1498,11 @@ class OadpWorkloads(WorkloadsOperations):
                 if oadp_internal_build != '':
                     oadp_details['oadp']['internal_build'] = oadp_internal_build.split('oadp-operator-bundle-container-')[1]
                     oadp_details['oadp']['iib'] = oadp_iib_cmd.split('iib:')[1]
+        else:
+            # internal build is not set must parse from operator name
+            import re
+            oadp_details['oadp']['internal_build'] = re.search(r'\w+-\w+\.\w([\d\.]+)', oadp_csv).group(1)
+            logger.info(f"::: INFO :: OADP internal build not available will parse from operator csv for major version {oadp_details['oadp']['internal_build']}")
 
         jsonpath_cluster_name = "'{print $2}'"
         cluster_name = self.__ssh.run(
@@ -2223,6 +2228,8 @@ class OadpWorkloads(WorkloadsOperations):
        self.get_ocp_details()
        self.get_velero_details()
        self.get_storage_details()
+       if self.this_is_downstream():
+           self.oadp_get_version_info()
 
        # Save test scenario run time settings run_metadata dict
        self.__run_metadata['summary']['runtime'].update(test_scenario)
