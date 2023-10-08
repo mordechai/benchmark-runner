@@ -1972,7 +1972,8 @@ class OadpWorkloads(WorkloadsOperations):
         """
         method collects all node avail resources via get_node_resource_avail_adm(self, ocp_node):
         """
-        get_node_names = self.__ssh.run(cmd=f'oc get nodes --no-headers -o custom-columns=":metadata.name"')
+        get_all_ready_state_nodes = """oc get nodes -o=json | jq -r '.items[] | select(.status.conditions[] | select(.type=="Ready" and .status=="True")) | .metadata.name'"""
+        get_node_names = self.__ssh.run(cmd=f'{get_all_ready_state_nodes}')
         if len(get_node_names.splitlines()) > 0 and 'error' not in get_node_names:
             for bm in get_node_names.splitlines():
                 self.get_node_resource_avail_adm(ocp_node=bm)
