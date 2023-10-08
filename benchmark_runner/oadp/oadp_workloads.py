@@ -1034,7 +1034,7 @@ class OadpWorkloads(WorkloadsOperations):
         this method is for testing oadp backup
         """
         if self.__test_env['source'] != 'upstream':
-            if plugin == 'restic':
+            if plugin == 'restic'or plugin == 'kopia':
                 backup_cmd = self.__ssh.run(
                     cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --default-volumes-to-fs-backup=true --snapshot-volumes=false")
                 if backup_cmd.find('submitted successfully') == 0:
