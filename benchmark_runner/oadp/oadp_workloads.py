@@ -1512,13 +1512,13 @@ class OadpWorkloads(WorkloadsOperations):
 
         jsonpath_oadp_subscription_used = "{.items[?(@.status.installedCSV == " + f'"{oadp_csv}"' + ")].metadata.name}"
         oadp_subscription_used = self.__ssh.run(
-            cmd=f"oc get subscription.operators.coreos.com --namespace=self.__test_env['velero_ns'] -o jsonpath='{jsonpath_oadp_subscription_used}'")
+            cmd=f"oc get subscription.operators.coreos.com --namespace {self.__test_env['velero_ns']} -o jsonpath='{jsonpath_oadp_subscription_used}'")
         if oadp_subscription_used != '':
             oadp_details['oadp']['subscription'] = oadp_subscription_used
 
         jsonpath_oadp_catalog_source = "'{.spec.source}'"
         oadp_catalog_source = self.__ssh.run(
-            cmd=f"oc get subscription.operators.coreos.com {oadp_subscription_used} --namespace=self.__test_env['velero_ns'] -o jsonpath={jsonpath_oadp_catalog_source}")
+            cmd=f"oc get subscription.operators.coreos.com {oadp_subscription_used} --namespace {self.__test_env['velero_ns']} -o jsonpath={jsonpath_oadp_catalog_source}")
         if oadp_catalog_source != '':
             oadp_details['oadp']['catalog_source'] = oadp_catalog_source
             #get iib here
