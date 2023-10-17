@@ -37,7 +37,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'backup-kopia-busybox-perf-single-1000-pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
+        # self.__oadp_scenario_name = 'backup-vsm-busybox-perf-single-100-pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
         self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
@@ -1041,9 +1041,14 @@ class OadpWorkloads(WorkloadsOperations):
                 if backup_cmd.find('submitted successfully') == 0:
                     print("Error backup attempt failed !!! ")
                     logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
-            if plugin == 'csi' or plugin == 'vsm':
+            if plugin == 'vsm':
                 backup_cmd = self.__ssh.run(
-                    cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup}")
+                    cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --snapshot-move-data=true")
+                if backup_cmd.find('submitted successfully') == 0:
+                    print("Error backup attempt failed !!! ")
+                    logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
+            if plugin == 'csi':
+                backup_cmd = self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup}")
                 if backup_cmd.find('submitted successfully') == 0:
                     print("Error backup attempt failed !!! ")
                     logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
