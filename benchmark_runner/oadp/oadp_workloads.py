@@ -37,7 +37,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'backup-restic-pvc-util-2-3-0-rbd-dd-1.1t' #backup-10pod-backup-vsm-pvc-util-minio-6g'
+        # self.__oadp_scenario_name = 'backup-kopia-busybox-perf-single-1000-pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
         self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
@@ -344,6 +344,7 @@ class OadpWorkloads(WorkloadsOperations):
                 self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['status'] = True
             else:
                 self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['status'] = False
+
 
     def is_num_of_results_valid(self, expected_size, percentage_of_expected_size, list_of_values):
         if len(list_of_values) == expected_size:
@@ -1147,6 +1148,36 @@ class OadpWorkloads(WorkloadsOperations):
                 json_query = '[{"op": "replace", "path": "/spec/template/spec/containers/0/args", "value":' + f'{velero_current_args}' + '}]'
                 self.patch_oc_resource(resource_type='deployment', resource_name='velero', namespace=self.__test_env['velero_ns'],patch_type='json', patch_json=json_query)
                 logger.info(f":: INFO :: Setting debug log level on velero upstream instance in {self.__test_env['velero_ns']}")
+
+    def config_dpa_for_plugin(self, scenario, oadp_namespace):
+        """
+        method sets up dpa for restic, kopia
+        """
+        dpa_data = self.get_oc_resource_to_json(resource_type='dpa', resource_name=self.__oadp_dpa, namespace=oadp_namespace)
+        if bool(dpa_data) == False:
+            logger.error(':: ERROR :: DPA is not present command to get dpa as json resulted in empty dict')
+
+        dpa_name = dpa_data['metadata']['name']
+        velero_enabled_plugins = dpa_data['spec']['configuration']['velero']['defaultPlugins']
+        is_csi_enabled = 'csi' in velero_enabled_plugins
+        is_nodeagent_present = 'nodeAgent' in dpa_data['spec']['configuration']
+        plugin =  scenario['args']['plugin']
+
+        if is_csi_enabled == False:
+            query = '[{"op": "replace", "path": "/spec/configuration", "value": {"nodeAgent": {"enable": true, "podConfig": {"resourceAllocations": {"limits": {"cpu": 2, "memory": "32768Mi"}, "requests": {"cpu": 1, "memory": "16384Mi"}}}}}}]'
+            self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
+                                   patch_type='replace',
+                                   patch_json=query)
+        if plugin == 'restic':
+            query = '{"spec": {"configuration": {"nodeAgent": {"uploaderType": "restic"}}}}'
+            self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
+                                   patch_type='merge',
+                                   patch_json=query)
+        if plugin == 'kopia' or plugin == 'vsm':
+            query = '{"spec": {"configuration": {"nodeAgent": {"uploaderType": "kopia"}}}}'
+            self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
+                                   patch_type='merge',
+                                   patch_json=query)
 
 
     def config_dpa_for_cephfs_shallow(self, enable, oadp_namespace):
@@ -2252,8 +2283,8 @@ class OadpWorkloads(WorkloadsOperations):
        # Set Velero Debug log level
        self.set_velero_log_level(oadp_namespace=self.__test_env['velero_ns'])
 
-       # Setup Datamover if needed
-       self.checking_for_configurations_for_datamover(test_scenario)
+       # Modify DPA uploaderType to match plugin from scenario
+       self.config_dpa_for_plugin(scenario=test_scenario, oadp_namespace=self.__test_env['velero_ns'])
 
        # when performing backup
        # Check if source namespace aka our dataset is preseent, if dataset not prsent then create it
