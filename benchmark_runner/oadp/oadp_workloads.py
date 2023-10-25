@@ -37,7 +37,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'backup-vsm-busybox-perf-single-100-pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
+        # self.__oadp_scenario_name = 'backup-kopia-busybox-perf-single-100-pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
         self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
@@ -1154,6 +1154,24 @@ class OadpWorkloads(WorkloadsOperations):
                 self.patch_oc_resource(resource_type='deployment', resource_name='velero', namespace=self.__test_env['velero_ns'],patch_type='json', patch_json=json_query)
                 logger.info(f":: INFO :: Setting debug log level on velero upstream instance in {self.__test_env['velero_ns']}")
 
+    def wait_for_dpa_changes(self, oadp_namespace):
+        """
+        method waits for velero ns to stabilize after change
+        """
+        get_workers_cmd = self.__ssh.run(
+            cmd="""oc get nodes -l node-role.kubernetes.io/worker -o jsonpath='{.items[*].metadata.name}'""")
+        num_of_node_agents_expected = len(get_workers_cmd.split(' '))
+        # node_agent + velero + adp_controll_manager
+        num_of_pods_expected = num_of_node_agents_expected + 2
+        try:
+            logger.info(":: INFO :: Waiting for DPA changes to take effect")
+            time.sleep(10)
+            self.verify_running_pods(num_of_pods_expected, target_namespace=oadp_namespace)
+        except Exception as err:
+            logger.error(f':: ERROR :: Issue in waiting for DPA changes to process in your oadp namespace {err}')
+
+
+
     def config_dpa_for_plugin(self, scenario, oadp_namespace):
         """
         method sets up dpa for restic, kopia
@@ -1183,7 +1201,6 @@ class OadpWorkloads(WorkloadsOperations):
             self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
                                    patch_type='merge',
                                    patch_json=query)
-
 
     def config_dpa_for_cephfs_shallow(self, enable, oadp_namespace):
         """
@@ -2288,8 +2305,10 @@ class OadpWorkloads(WorkloadsOperations):
        # Set Velero Debug log level
        self.set_velero_log_level(oadp_namespace=self.__test_env['velero_ns'])
 
-       # Modify DPA uploaderType to match plugin from scenario
-       self.config_dpa_for_plugin(scenario=test_scenario, oadp_namespace=self.__test_env['velero_ns'])
+       if self.this_is_downstream():
+           # Modify DPA uploaderType to match plugin from scenario
+           self.config_dpa_for_plugin(scenario=test_scenario, oadp_namespace=self.__test_env['velero_ns'])
+           self.wait_for_dpa_changes(oadp_namespace=self.__test_env['velero_ns'])
 
        # when performing backup
        # Check if source namespace aka our dataset is preseent, if dataset not prsent then create it
