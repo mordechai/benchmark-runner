@@ -1431,14 +1431,7 @@ class OadpWorkloads(WorkloadsOperations):
         if any(ext in cmd_set_volume_snapshot_class for ext in expected_result_output) == False:
             print(f"Unable to set volume-snapshot-class {sc} ")
             logger.exception(f"Unable to set volume-snapshot-class {sc}")
-        if scenario['args']['plugin'] == 'vsm':
-            query = '{"deletionPolicy": "Retain"}'
-            logger.info(f"::INFO:: Attempting to set deletion policy of scale-volumesnapshotclass to {query}")
-            self.patch_oc_resource(resource_type='volumesnapshotclass', resource_name='scale-volumesnapshotclass', namespace=self.__test_env['velero_ns'],patch_type='merge',patch_json=query)
-        else:
-            query = '{"deletionPolicy": "Delete"}'
-            logger.info(f"::INFO:: Attempting to set deletion policy of scale-volumesnapshotclass to {query}")
-            self.patch_oc_resource(resource_type='volumesnapshotclass', resource_name='scale-volumesnapshotclass',namespace=self.__test_env['velero_ns'], patch_type='merge', patch_json=query)
+
 
     @logger_time_stamp
     def set_default_storage_class(self,sc):
