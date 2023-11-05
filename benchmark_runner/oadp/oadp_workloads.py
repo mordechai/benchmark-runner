@@ -37,8 +37,8 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'backup-kopia-busybox-perf-single-100-pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
-        self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
+        self.__oadp_scenario_name = 'restore-csi-pvc-util-2-2-10-cephfs-swift-3t' #backup-10pod-backup-vsm-pvc-util-minio-6g'
+        # self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
@@ -1018,13 +1018,15 @@ class OadpWorkloads(WorkloadsOperations):
     @logger_time_stamp
     def exec_restore(self, plugin, restore_name, backup_name):
         """
-        this method is for restoring oadp backups
-      os  """
+        this method is for executing restores
+        """
         #              cmd: "oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero restore create {{restore_name}}  --from-backup {{backup_name}}"
         if self.__test_env['source'] != 'upstream':
             restore_cmd = self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero restore create {restore_name} --from-backup {backup_name} -n {self.__test_env['velero_ns']}")
+            logger.info(f"### INFO ### Executing OADP restore with: oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero restore create {restore_name} --from-backup {backup_name} -n {self.__test_env['velero_ns']}")
         if self.__test_env['source'] == 'upstream':
             restore_cmd = self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero restore create {restore_name} --from-backup {backup_name} -n {self.__test_env['velero_ns']}")
+            logger.info(f"### INFO ### Executing  UPSTREAM velero restore with: cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero restore create {restore_name} --from-backup {backup_name} -n {self.__test_env['velero_ns']}")
         if restore_cmd.find('submitted successfully') == 0:
             print("Error restore was not successfully started")
             logging.error(f'Error restore did not execut stdout {restore_cmd}')
@@ -1032,23 +1034,26 @@ class OadpWorkloads(WorkloadsOperations):
     @logger_time_stamp
     def exec_backup(self, plugin, backup_name, namespaces_to_backup):
         """
-        this method is for testing oadp backup
+        this method is for executing oadp backup and upstream backups
         """
         if self.__test_env['source'] != 'upstream':
             if plugin == 'restic'or plugin == 'kopia':
                 backup_cmd = self.__ssh.run(
                     cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --default-volumes-to-fs-backup=true --snapshot-volumes=false")
+                logger.info(f"### OADP Backup executed with: oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --default-volumes-to-fs-backup=true --snapshot-volumes=false")
                 if backup_cmd.find('submitted successfully') == 0:
                     print("Error backup attempt failed !!! ")
                     logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
             if plugin == 'vsm':
                 backup_cmd = self.__ssh.run(
                     cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --snapshot-move-data=true")
+                logger.info(f"### INFO ### OADP BACKUP executed with: oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --snapshot-move-data=true")
                 if backup_cmd.find('submitted successfully') == 0:
                     print("Error backup attempt failed !!! ")
                     logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
             if plugin == 'csi':
                 backup_cmd = self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup}")
+                logger.info(f"### INFO ### OADP BACKUP executed with: oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup}")
                 if backup_cmd.find('submitted successfully') == 0:
                     print("Error backup attempt failed !!! ")
                     logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
@@ -1058,18 +1063,21 @@ class OadpWorkloads(WorkloadsOperations):
             if plugin == 'restic' or plugin == 'kopia':
                 backup_cmd = self.__ssh.run(
                     cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --default-volumes-to-fs-backup=true --snapshot-volumes=false -n {self.__test_env['velero_ns']}")
+                logger.info(f"### INFO ### UPSTREAM Velero backup executed with: cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --default-volumes-to-fs-backup=true --snapshot-volumes=false -n {self.__test_env['velero_ns']}")
                 if backup_cmd.find('submitted successfully') == 0:
                     print("Error backup attempt failed !!! ")
                     logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
             if plugin == 'csi':
                 backup_cmd = self.__ssh.run(
                     cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} -n {self.__test_env['velero_ns']}")
+                logger.info(f"### INFO ### UPSTREAM Velero backup executed with: cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} -n {self.__test_env['velero_ns']}")
                 if backup_cmd.find('submitted successfully') == 0:
                     print("Error backup attempt failed !!! ")
                     logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
             if plugin == 'vsm':
                 backup_cmd = self.__ssh.run(
                     cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --data-mover 'velero' --snapshot-move-data=true -n {self.__test_env['velero_ns']}")
+                logger.info(f"### INFO ### UPSTREAM Velero backup executed with: cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --data-mover 'velero' --snapshot-move-data=true -n {self.__test_env['velero_ns']}")
                 if backup_cmd.find('submitted successfully') == 0:
                     print("Error backup attempt failed !!! ")
                     logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
