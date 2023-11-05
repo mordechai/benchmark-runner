@@ -37,7 +37,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'restore-csi-pvc-util-2-2-10-cephfs-swift-3t' #backup-10pod-backup-vsm-pvc-util-minio-6g'
+        # self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-100-pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
         self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
