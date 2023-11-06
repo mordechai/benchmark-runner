@@ -37,7 +37,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-100-pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
+        # self.__oadp_scenario_name = 'backup-restic-busybox-perf-single-100-pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
         self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
@@ -1186,29 +1186,55 @@ class OadpWorkloads(WorkloadsOperations):
         """
         dpa_data = self.get_oc_resource_to_json(resource_type='dpa', resource_name=self.__oadp_dpa, namespace=oadp_namespace)
         if bool(dpa_data) == False:
-            logger.error(':: ERROR :: DPA is not present command to get dpa as json resulted in empty dict')
+            logger.error(':: ERROR :: FAIL DPA is not present command to get dpa as json resulted in empty dict will attempt to recreate')
+            logger.info(f'### INFO ### Updating DPA via ansible: ansible-playbook {self.__oadp_base_dir}/modify-dpa.yaml -vvv')
+            update_dpa = self.__ssh.run(cmd=f'cd  {self.__oadp_base_dir}; ansible-playbook {self.__oadp_base_dir}/modify-dpa.yaml -vvv')
+            ran_without_errors = self.validate_ansible_play(update_dpa)
+            if not ran_without_errors:
+                logger.warn(f":: WARN :: DPA update FAILED to run successfully see:  {update_dpa} ")
+            else:
+                logger.info(f":: INFO :: DPA update invoked successfully via ansible-play output was: {update_dpa} ")
+
 
         dpa_name = dpa_data['metadata']['name']
+        bucket_name = dpa_data['spec']['backupLocations'][0]['velero']['objectStorage']['bucket']
+        config_profile = dpa_data['spec']['backupLocations'][0]['velero']['config']['profile']
+        s3Url = dpa_data['spec']['backupLocations'][0]['velero']['config']['s3Url']
+        cred_name = dpa_data['spec']['backupLocations'][0]['velero']['credential']['name']
+        #current_uploaderType = dpa_data['spec']['configuration']['nodeAgent']['uploaderType']
+        #uploader_type oadp_version bucket_name config_profile s3Url cred_name
         velero_enabled_plugins = dpa_data['spec']['configuration']['velero']['defaultPlugins']
         is_csi_enabled = 'csi' in velero_enabled_plugins
         is_nodeagent_present = 'nodeAgent' in dpa_data['spec']['configuration']
-        plugin =  scenario['args']['plugin']
+        if scenario['args']['plugin'] == 'csi' or  scenario['args']['plugin'] == 'vsm':
+            uploader_type = 'kopia'
+        else:
+            uploader_type = scenario['args']['plugin']
+        # because of 1.3 issue DPA patching not possible will need to invoke new dpa via j2
+        ansible_args = f"dpa_name={dpa_name} bucket_name={bucket_name} plugin_type={uploader_type} profile={config_profile} S3var={s3Url} cred_name={cred_name} oadp_ns={oadp_namespace}"
+        logger.info(f'### INFO ### Updating DPA via ansible: ansible-playbook {self.__oadp_base_dir}/modify-dpa.yaml -e "{ansible_args}" -vvv')
+        update_dpa = self.__ssh.run(cmd=f'cd  {self.__oadp_base_dir}; ansible-playbook {self.__oadp_base_dir}/modify-dpa.yaml -e "{ansible_args}" -vvv')
+        ran_without_errors = self.validate_ansible_play(update_dpa)
+        if not ran_without_errors:
+            logger.warn(f":: WARN :: DPA update FAILED to run successfully see:  {update_dpa} ")
+        else:
+            logger.info(f":: INFO :: DPA update invoked successfully via ansible-play output was: {update_dpa} ")
 
-        if is_csi_enabled == False:
-            query = '[{"op": "replace", "path": "/spec/configuration", "value": {"nodeAgent": {"enable": true, "podConfig": {"resourceAllocations": {"limits": {"cpu": 2, "memory": "32768Mi"}, "requests": {"cpu": 1, "memory": "16384Mi"}}}}}}]'
-            self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
-                                   patch_type='replace',
-                                   patch_json=query)
-        if plugin == 'restic':
-            query = '{"spec": {"configuration": {"nodeAgent": {"uploaderType": "restic"}}}}'
-            self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
-                                   patch_type='merge',
-                                   patch_json=query)
-        if plugin == 'kopia' or plugin == 'vsm':
-            query = '{"spec": {"configuration": {"nodeAgent": {"uploaderType": "kopia"}}}}'
-            self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
-                                   patch_type='merge',
-                                   patch_json=query)
+        # if is_csi_enabled == False:
+        #     query = '[{"op": "replace", "path": "/spec/configuration", "value": {"nodeAgent": {"enable": true, "podConfig": {"resourceAllocations": {"limits": {"cpu": 2, "memory": "32768Mi"}, "requests": {"cpu": 1, "memory": "16384Mi"}}}}}}]'
+        #     self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
+        #                            patch_type='replace',
+        #                            patch_json=query)
+        # if plugin == 'restic':
+        #     query = '{"spec": {"configuration": {"nodeAgent": {"uploaderType": "restic"}}}}'
+        #     self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
+        #                            patch_type='merge',
+        #                            patch_json=query)
+        # if plugin == 'kopia' or plugin == 'vsm':
+        #     query = '{"spec": {"configuration": {"nodeAgent": {"uploaderType": "kopia"}}}}'
+        #     self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
+        #                            patch_type='merge',
+        #                            patch_json=query)
 
     def config_dpa_for_cephfs_shallow(self, enable, oadp_namespace):
         """
