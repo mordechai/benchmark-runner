@@ -1211,7 +1211,7 @@ class OadpWorkloads(WorkloadsOperations):
         else:
             uploader_type = scenario['args']['plugin']
         # because of 1.3 issue DPA patching not possible will need to invoke new dpa via j2
-        ansible_args = f"dpa_name={dpa_name} bucket_name={bucket_name} plugin_type={uploader_type} profile={config_profile} S3var={s3Url} cred_name={cred_name} oadp_ns={oadp_namespace}"
+        ansible_args = f"dpa_name={dpa_name} bucket_name={bucket_name} plugin_type={uploader_type} profile={config_profile} cred_name={cred_name} oadp_ns={oadp_namespace}"
         logger.info(f'### INFO ### Updating DPA via ansible: ansible-playbook {self.__oadp_base_dir}/modify-dpa.yaml -e "{ansible_args}" -vvv')
         update_dpa = self.__ssh.run(cmd=f'cd  {self.__oadp_base_dir}; ansible-playbook {self.__oadp_base_dir}/modify-dpa.yaml -e "{ansible_args}" -vvv')
         ran_without_errors = self.validate_ansible_play(update_dpa)
