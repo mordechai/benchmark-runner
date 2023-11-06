@@ -37,7 +37,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'backup-restic-busybox-perf-single-100-pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
+        # self.__oadp_scenario_name = 'backup-kopia-busybox-perf-single-100-pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
         self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
@@ -356,6 +356,30 @@ class OadpWorkloads(WorkloadsOperations):
                 logger.info(f':: INFO ::  is_num_of_results_valid {len(list_of_values)} >= {percentage_of_expected_size} of {expected_size} which is {(percentage / 100) * expected_size}')
                 return True
         return False
+
+    def verify_bsl_status(self):
+        """
+        get bsl status
+        """
+        retries = 0
+        max_retries = 30
+        while retries < max_retries:
+            bsl_data = self.get_oc_resource_to_json(resource_type='bsl', resource_name='default',
+                                                    namespace=self.__test_env['velero_ns'])
+            logger.info(f"### INFO ### verify_bsl_status: attempt {retries} of {max_retries} shows cmd_output {bsl_data}")
+            if bool(bsl_data) == False:
+                logger.warn(':: ERROR :: get_bsl_status showed that BSL is not present or json resulted in empty dict')
+            if 'phase' in bsl_data['status']:
+                bsl_status = bsl_data['status']['phase']
+                logger.info(f"### INFO ### verify_bsl_status:  get_bsl_status returned status of {bsl_status}")
+                if bsl_status == "Available":
+                        return
+                else:
+                    logger.info(f"### INFO ### verify_bsl_status:  get_bsl_status returned status of {bsl_status}")
+            else:
+                logger.info(f':: INFO :: verify_bsl_status: BSL state is not ready as phase is not yet available sleeping for 5 seconds this may take up to 30s')
+                time.sleep(5)
+                retries += 1
 
     def compare_dicts(self, dict1, dict2):
         if set(dict1.keys()) != set(dict2.keys()):
@@ -1173,7 +1197,7 @@ class OadpWorkloads(WorkloadsOperations):
         num_of_pods_expected = num_of_node_agents_expected + 2
         try:
             logger.info(":: INFO :: Waiting for DPA changes to take effect")
-            time.sleep(10)
+            time.sleep(15)
             self.verify_running_pods(num_of_pods_expected, target_namespace=oadp_namespace)
         except Exception as err:
             logger.error(f':: ERROR :: Issue in waiting for DPA changes to process in your oadp namespace {err}')
@@ -2336,6 +2360,7 @@ class OadpWorkloads(WorkloadsOperations):
            # Modify DPA uploaderType to match plugin from scenario
            self.config_dpa_for_plugin(scenario=test_scenario, oadp_namespace=self.__test_env['velero_ns'])
            self.wait_for_dpa_changes(oadp_namespace=self.__test_env['velero_ns'])
+           self.verify_bsl_status()
 
        # when performing backup
        # Check if source namespace aka our dataset is preseent, if dataset not prsent then create it
