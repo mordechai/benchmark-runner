@@ -1,11 +1,11 @@
 
-class ClusterBusterError(Exception):
+class OadpError(Exception):
     """ Base class for all benchmark operator error classes.
         All exceptions raised by the benchmark runner library should inherit from this class. """
     pass
 
 
-class MissingResultReport(ClusterBusterError):
+class MissingResultReport(OadpError):
     """
     This class is error for missing cluster buster report result
     """
@@ -14,7 +14,7 @@ class MissingResultReport(ClusterBusterError):
         super(MissingResultReport, self).__init__(self.message)
 
 
-class MissingElasticSearch(ClusterBusterError):
+class MissingElasticSearch(OadpError):
     """
     This class is error for missing ElasticSearch details
     """
