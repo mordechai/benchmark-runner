@@ -43,6 +43,8 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
         self.__oadp_validation_mode = self._environment_variables_dict.get('validation_mode', 'light') # none - skips || light - % of randomly selected pods checked || full - every pod checked
+        self.__oadp_resource_collection = False
+
         self.__retry_logic = {
             'interval_between_checks': 15,
              'max_attempts': 20
@@ -106,6 +108,8 @@ class OadpWorkloads(WorkloadsOperations):
         # run artifacts data
         result_report_json_data['metadata'] = {}
         result_report_json_data['metadata'].update(metadata_details)
+        with open(self.__result_report, 'w') as output_file:
+            json.dump(result_report_json_data, output_file, indent=4)
 
         self._es_operations.upload_to_elasticsearch(index=index, data=result_report_json_data)
 
@@ -2398,15 +2402,17 @@ class OadpWorkloads(WorkloadsOperations):
                                              cr_name=test_scenario['args']['OADP_CR_NAME'])
 
        # Get Node and Pod Resource prior to test
-       self.collect_all_node_resource()
-       self.get_resources_per_ns(namespace=self.__test_env['velero_ns'], label="start")
+       if self.__oadp_resource_collection:
+           self.collect_all_node_resource()
+           self.get_resources_per_ns(namespace=self.__test_env['velero_ns'], label="start")
 
        # # Launch OADP scenario
        self.oadp_execute_scenario(test_scenario, run_method='python')
 
-       # Get Pod Resource after the test
-       self.collect_all_node_resource()
-       self.get_resources_per_ns(namespace=self.__test_env['velero_ns'], label="end")
+       if self.__oadp_resource_collection:
+           # Get Pod Resource after the test
+           self.collect_all_node_resource()
+           self.get_resources_per_ns(namespace=self.__test_env['velero_ns'], label="end")
 
        # Parse result CR for status, and timestamps
        self.parse_oadp_cr(ns=self.__test_env['velero_ns'], cr_type=test_scenario['args']['OADP_CR_TYPE'],
@@ -2430,8 +2436,16 @@ class OadpWorkloads(WorkloadsOperations):
 
        if os.path.exists(os.path.join(self.__result_report)) and not os.stat(self.__result_report).st_size == 0:
            self.__ssh.run(cmd=f'cp {self.__result_report} {self._run_artifacts_path}')
+           logger.info(f"### INFO ### OADP Report at {self.__result_report} moved to {self._run_artifacts_path}")
+           # updating self.__result_report to now read from  run_artifacts_path
+           old_report_path = self.__result_report
+           self.__result_report = os.path.join(self._run_artifacts_path, 'oadp-report.json')
+           logger.info(f"### INFO ### OADP Report var location updated to now read from dir {self._run_artifacts_path} as {self.__result_report}")
+           self.__ssh.run(cmd=f'mv {old_report_path} /tmp/previous-run-oadp-report.json')
+
            return True
        else:
+           logger.warning(f' WARN FYI - self.__result_report located at {self.__result_report} was empty')
            result_report_json_data = {}
            result_report_json_data['result'] = 'Failed'
            result_report_json_data['run_artifacts_url'] = os.path.join(self._run_artifacts_url,
@@ -2443,7 +2457,7 @@ class OadpWorkloads(WorkloadsOperations):
            # else:
            #     index = f'oadp-metadata-results'
            index = self.generate_elastic_index(test_scenario)
-           logger.info(f'upload index: {index}')
+           logger.info(f'upload index: {index} after self.__result_report content check failed')
            self._es_operations.upload_to_elasticsearch(index=index, data=result_report_json_data)
            raise MissingResultReport()
 
