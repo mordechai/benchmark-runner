@@ -7,10 +7,10 @@ class OadpError(Exception):
 
 class MissingResultReport(OadpError):
     """
-    This class is error for missing cluster buster report result
+    This class is error for missing oadp report result
     """
     def __init__(self):
-        self.message = "Missing cluster buster result report"
+        self.message = "Missing oadp result report"
         super(MissingResultReport, self).__init__(self.message)
 
 

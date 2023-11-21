@@ -37,7 +37,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'restore-csi-busybox-perf-single-10-pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
+        # self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-10-pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
         self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
@@ -136,6 +136,7 @@ class OadpWorkloads(WorkloadsOperations):
         """
         self.__ssh.run(cmd=f'oc delete pod -A -l {self.__namespace}')
 
+    @logger_time_stamp
     def initialize_workload(self):
         """
         This method includes all the initialization of oadp workload
@@ -146,6 +147,7 @@ class OadpWorkloads(WorkloadsOperations):
         if self._enable_prometheus_snapshot:
             self.start_prometheus()
 
+    @logger_time_stamp
     def finalize_workload(self):
         """
         This method includes all the finalization of oadp workload
@@ -350,6 +352,7 @@ class OadpWorkloads(WorkloadsOperations):
                 self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['status'] = False
 
 
+    @logger_time_stamp
     def is_num_of_results_valid(self, expected_size, percentage_of_expected_size, list_of_values):
         if len(list_of_values) == expected_size:
             logger.info(f':: INFO :: {len(list_of_values)} matches total {expected_size}')
@@ -361,6 +364,7 @@ class OadpWorkloads(WorkloadsOperations):
                 return True
         return False
 
+    @logger_time_stamp
     def verify_bsl_status(self):
         """
         get bsl status
@@ -385,6 +389,8 @@ class OadpWorkloads(WorkloadsOperations):
                 time.sleep(5)
                 retries += 1
 
+
+    @logger_time_stamp
     def compare_dicts(self, dict1, dict2):
         if set(dict1.keys()) != set(dict2.keys()):
             return False
@@ -395,6 +401,8 @@ class OadpWorkloads(WorkloadsOperations):
 
         return True
 
+
+    @logger_time_stamp
     def get_status_of_pods_by_ns(self, scenario):
         """ method creates dict summary of  pods by status """
         target_namespace = scenario['args']['namespaces_to_backup']
@@ -523,6 +531,7 @@ class OadpWorkloads(WorkloadsOperations):
                     logger.warn(f':: WARNING :: verify_running_pods: {target_namespace} has  {len(running_pods)} in running state, execpted total desired: {num_of_pods_expected}')
                     return False
 
+    @logger_time_stamp
     def clean_s3_bucket(self, scenario, oadp_namespace):
         """
         cleans s3 bucket
@@ -556,6 +565,7 @@ class OadpWorkloads(WorkloadsOperations):
             logger.info(f":: INFO :: clean_s3_bucket invoked successfully via ansible-play output was: {clean_bucket_cmd} ")
 
 
+    @logger_time_stamp
     def clean_odf_pool(self, scenario):
         """
         cleans pool of ceph and rbd
@@ -971,6 +981,7 @@ class OadpWorkloads(WorkloadsOperations):
 
 
 
+    @logger_time_stamp
     def get_expected_files_count(self, test_scenario):
         results_capacity_expected = {}
         import math
@@ -998,6 +1009,7 @@ class OadpWorkloads(WorkloadsOperations):
              current_file_size = bs * count
         return results_capacity_expected
 
+    @logger_time_stamp
     def capacity_usage_and_expected_comparison(self, results_capacity_expected, results_capacity_usage):
         if len(results_capacity_expected) != len(results_capacity_usage):
             print("Not Equal")
@@ -1149,6 +1161,7 @@ class OadpWorkloads(WorkloadsOperations):
         else:
             return False
 
+    @logger_time_stamp
     def verify_volsync_present(self):
         """
         return true or false if volsync present
@@ -1163,6 +1176,7 @@ class OadpWorkloads(WorkloadsOperations):
             logger.info(':: INFO :: Volsync is present')
             return True
 
+    @logger_time_stamp
     def setup_ocs_cephfs_shallow(self):
         """
         sets up ocs-storagecluster-cephfs-shallow for 4.12
@@ -1174,6 +1188,7 @@ class OadpWorkloads(WorkloadsOperations):
             logger.info(':: INFO :: cephfs-shallow sc is present')
 
 
+    @logger_time_stamp
     def set_velero_log_level(self, oadp_namespace):
         """ sets velero log level """
         if self.this_is_downstream():
@@ -1190,6 +1205,7 @@ class OadpWorkloads(WorkloadsOperations):
                 self.patch_oc_resource(resource_type='deployment', resource_name='velero', namespace=self.__test_env['velero_ns'],patch_type='json', patch_json=json_query)
                 logger.info(f":: INFO :: Setting debug log level on velero upstream instance in {self.__test_env['velero_ns']}")
 
+    @logger_time_stamp
     def wait_for_dpa_changes(self, oadp_namespace):
         """
         method waits for velero ns to stabilize after change
@@ -1208,6 +1224,7 @@ class OadpWorkloads(WorkloadsOperations):
 
 
 
+    @logger_time_stamp
     def config_dpa_for_plugin(self, scenario, oadp_namespace):
         """
         method sets up dpa for restic, kopia
@@ -1264,6 +1281,7 @@ class OadpWorkloads(WorkloadsOperations):
         #                            patch_type='merge',
         #                            patch_json=query)
 
+    @logger_time_stamp
     def config_dpa_for_cephfs_shallow(self, enable, oadp_namespace):
         """
         method adds or removes cephfs-shallow to dpa
@@ -1288,6 +1306,7 @@ class OadpWorkloads(WorkloadsOperations):
                 logger.info(':: INFO :: DPA has NO spec/features so no volumeoptions to remove')
 
 
+    @logger_time_stamp
     def config_datamover(self, oadp_namespace, scenario):
         """
         method for customizing datamover concurrency and timeout
@@ -1347,6 +1366,7 @@ class OadpWorkloads(WorkloadsOperations):
                                        patch_type='json',
                                        patch_json=query)
 
+    @logger_time_stamp
     def is_datamover_enabled(self, oadp_namespace, scenario):
         # Get DPA contents
         dpa_data = self.get_oc_resource_to_json(resource_type='dpa', resource_name=self.__oadp_dpa,
@@ -1367,6 +1387,7 @@ class OadpWorkloads(WorkloadsOperations):
             return False
 
 
+    @logger_time_stamp
     def enable_datamover(self, oadp_namespace, scenario):
         """
         # can handle sc and vsc defaults before this invoked.
@@ -1436,6 +1457,7 @@ class OadpWorkloads(WorkloadsOperations):
         if (enable_dataMover != '') and (not 'error' in enable_dataMover):
             logger.info(f':: INFO :: Datamover is now enabled for {dpa_name}')
 
+    @logger_time_stamp
     def disable_datamover(self, oadp_namespace):
         """
         method disables datamover from dpa
@@ -1525,6 +1547,7 @@ class OadpWorkloads(WorkloadsOperations):
                 if set_sc_as_non_default_cmd.find('patched') < 0:
                     logger.warn(f"Note that storage {storage} was set  is-default-class:false as its not desired sc of {sc} ")
 
+    @logger_time_stamp
     def patch_oc_resource(self, resource_type, resource_name, namespace, patch_type, patch_json):
         """
         method returns oc resource info
@@ -1970,6 +1993,7 @@ class OadpWorkloads(WorkloadsOperations):
         else:
             return []
 
+    @logger_time_stamp
     def get_oc_resource_to_json(self, resource_type, resource_name, namespace):
         """
         method returns oc resource info
@@ -2180,6 +2204,7 @@ class OadpWorkloads(WorkloadsOperations):
         test_data = yaml.safe_load(Path(self.__oadp_scenario_data).read_text())
         return (test_data['scenarios'][index])
 
+    @logger_time_stamp
     def get_dataset_validation_mode(self, scenario):
         """
         method gets validation mode set from either yaml or cli
@@ -2257,6 +2282,7 @@ class OadpWorkloads(WorkloadsOperations):
         return True
 
 
+    @logger_time_stamp
     def get_reduced_list(self, original_list):
         import random
         if not original_list:  # If the list is empty, return an empty list
@@ -2302,6 +2328,7 @@ class OadpWorkloads(WorkloadsOperations):
                 self.__oadp_resources[f"{base_pod_name}-{count - 1}"] = {}
                 self.__oadp_runtime_resource_mapping[pod_name] = f"{base_pod_name}-{count - 1}"
 
+    @logger_time_stamp
     def remove_previous_run_report(self):
         """
         method checks for previous report
@@ -2315,6 +2342,7 @@ class OadpWorkloads(WorkloadsOperations):
         else:
             logger.info(f"### INFO ### Checks for left over OADP Reports were successful no left overs found at {self.__result_report} ")
 
+    @logger_time_stamp
     def set_velero_stream_source(self):
         """
         method to detect whether its downstream or upstream velero
@@ -2328,6 +2356,7 @@ class OadpWorkloads(WorkloadsOperations):
             self.__test_env['source'] = 'downstream'
             logger.info(f":: INFO :: Velero namespace {self.__test_env['velero_ns']} is downstream")
 
+    @logger_time_stamp
     def this_is_downstream(self):
         """
         helper function to return bool if its downstream
@@ -2458,30 +2487,38 @@ class OadpWorkloads(WorkloadsOperations):
            self.__result_report = os.path.join(self._run_artifacts_path, 'oadp-report.json')
            logger.info(f"### INFO ### OADP Report var location updated to now read from dir {self._run_artifacts_path} as {self.__result_report}")
            self.__ssh.run(cmd=f'mv {old_report_path} /tmp/previous-run-oadp-report.json')
-
            return True
        else:
+           self.send_failed_result(scenario=test_scenario)
            logger.warning(f' WARN FYI - self.__result_report located at {self.__result_report} was empty')
-           result_report_json_data = {}
-           result_report_json_data['result'] = 'Failed'
-           result_report_json_data['run_artifacts_url'] = os.path.join(self._run_artifacts_url,
-                                                                       f'{self._get_run_artifacts_hierarchy(workload_name=self._workload, is_file=True)}-{self._time_stamp_format}.tar.gz')
-           # if self._run_type == 'test_ci':
-           #     index = f'oadp-metadata-test-ci-results'
-           # elif self._run_type == 'release':
-           #     index = f'oadp-metadata-release-results'
-           # else:
-           #     index = f'oadp-metadata-results'
-           index = self.generate_elastic_index(test_scenario)
-           logger.info(f'upload index: {index} after self.__result_report content check failed')
-           self._es_operations.upload_to_elasticsearch(index=index, data=result_report_json_data)
            raise MissingResultReport()
 
+    @logger_time_stamp
+    def send_failed_result(self, scenario):
+        """
+        send failed result to elk
+        """
+        datetime_format = '%Y-%m-%d %H:%M:%S'
+        result_report_json_data = {}
+        result_report_json_data['result'] = 'Failed'
+        result_report_json_data['status'] = 'Failed'
+        result_report_json_data['run_artifacts_url'] = os.path.join(self._run_artifacts_url,
+                                                                    f'{self._get_run_artifacts_hierarchy(workload_name=self._workload, is_file=True)}-{self._time_stamp_format}.tar.gz')
+        index = self.generate_elastic_index(scenario)
+        logger.info(f'upload index: {index} after self.__result_report content check failed')
+        metadata_details = {'uuid': self._environment_variables_dict['uuid'],
+                            'upload_date': datetime.now().strftime(datetime_format),
+                            'run_artifacts_url': os.path.join(self._run_artifacts_url,
+                                                              f'{self._get_run_artifacts_hierarchy(workload_name=self._workload, is_file=True)}-{self._time_stamp_format}.tar.gz'),
+                            'scenario': self.__run_metadata['summary']['runtime']['name']}
+        result_report_json_data['metadata'] = {}
+        result_report_json_data['metadata'].update(metadata_details)
+        self._es_operations.upload_to_elasticsearch(index=index, data=result_report_json_data)
 
     @logger_time_stamp
     def cleaning_up_oadp_resources(self, scenario):
         """
-        method removes oapd CR or dataset if set via CLI option
+        methodfinalize removes oapd CR or dataset if set via CLI option
         """
         if self.__oadp_cleanup_cr_post_run:
             if 'restore' == scenario['testtype']:
@@ -2503,6 +2540,7 @@ class OadpWorkloads(WorkloadsOperations):
             logger.info(f'*** Skipping post run cleaning up of OADP dataset  *** as self.__oadp_cleanup_dataset_post_run: {self.__oadp_cleanup_dataset_post_run}')
 
 
+    @logger_time_stamp
     def checking_for_configurations_for_datamover(self, test_scenario):
         """
         method wraps datamover logic flow for setting and removing dm downstream
@@ -2560,8 +2598,7 @@ class OadpWorkloads(WorkloadsOperations):
         # when error raised finalize workload
         except Exception as e:
             logger.error(f"{self._workload} workload raised an exception: {str(e)}")
-            # finalize workload
-            self.finalize_workload()
+            raise e
             return False
 
         return True
