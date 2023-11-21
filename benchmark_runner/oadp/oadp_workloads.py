@@ -2302,6 +2302,19 @@ class OadpWorkloads(WorkloadsOperations):
                 self.__oadp_resources[f"{base_pod_name}-{count - 1}"] = {}
                 self.__oadp_runtime_resource_mapping[pod_name] = f"{base_pod_name}-{count - 1}"
 
+    def remove_previous_run_report(self):
+        """
+        method checks for previous report
+        if it exists it removes it
+        """
+        if os.path.exists(os.path.join(self.__result_report)):
+            logger.warning(f"### WARN ### existing file related to OADP Report found at {self.__result_report} this maybe a left over test result ")
+            os.remove(path=self.__result_report)
+            logger.info(f"### INFO ### OADP Report at {self.__result_report} was removed")
+            return True
+        else:
+            logger.info(f"### INFO ### Checks for left over OADP Reports were successful no left overs found at {self.__result_report} ")
+
     def set_velero_stream_source(self):
         """
         method to detect whether its downstream or upstream velero
@@ -2329,6 +2342,9 @@ class OadpWorkloads(WorkloadsOperations):
        """
        # Load Scenario Details
        test_scenario = self.load_test_scenario()
+
+       # Verify no left over test results
+       self.remove_previous_run_report()
 
        # Detect if were using upstream/downstream by velero ns contents
        self.set_velero_stream_source()
