@@ -1752,24 +1752,24 @@ class OadpWorkloads(WorkloadsOperations):
             logger.warn(f':: WARN :: in delete_oadp_custom_resources  raised an exception related to {cr_name} deletion attempt {err}')
 
     @logger_time_stamp
-    def find_test_scenario_index(self, scenario_name):
+    def load_test_scenario(self):
         """
-        This method return index of which test scenarios
+        This method return data of test scenarios for __oadp_scenario_name
         to supply details of oadp test scenario to run
         """
         if os.path.exists(os.path.join(self.__oadp_scenario_data)) and not os.stat(
                 self.__oadp_scenario_data).st_size == 0:
             test_data = yaml.safe_load(Path(self.__oadp_scenario_data).read_text())
-            for index in range(len(test_data['scenarios'])):
-                if test_data['scenarios'][index]['name'] == scenario_name:
-                    print(f"{test_data['scenarios'][index]['name']}  == f{scenario_name}")
-                    return index
-                else:
-                    print(f" no match found on try {index}")
+        for case in test_data['scenarios']:
+            logger.info('doing a test')
+            if case['name'] == self.__oadp_scenario_name:
+                logger.info(
+                    f" load_test_scenario has loaded details of scenario: {self.__oadp_scenario_name} from the yaml")
+                return case
         else:
-            print('Yaml for test scenarios is not found or empty!!')
+            logger.error('Yaml for test scenarios is not found or empty!!')
             logger.error('Test Scenario index is not found')
-            logger.exception(f'Test Scenario {scenario_name} index is not found')
+            logger.exception(f'Test Scenario {self.__oadp_scenario_name} index is not found')
 
     @logger_time_stamp
     def parse_oadp_cr(self, ns, cr_type, cr_name):
@@ -2190,19 +2190,6 @@ class OadpWorkloads(WorkloadsOperations):
                 else:
                     logger.info('Restore passed post run validations')
 
-
-    @logger_time_stamp
-    def load_test_scenario(self):
-        """
-        method parses yaml which contains test scenario details
-        """
-        # parse test yaml to find desired scenario
-        index = self.find_test_scenario_index(scenario_name=self.__oadp_scenario_name)
-
-        # Read yaml which contains test scenario details
-        # Load data from oadp-helpers/templates/internal_data/tests.yaml
-        test_data = yaml.safe_load(Path(self.__oadp_scenario_data).read_text())
-        return (test_data['scenarios'][index])
 
     @logger_time_stamp
     def get_dataset_validation_mode(self, scenario):
