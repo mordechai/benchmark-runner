@@ -37,7 +37,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-10-pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
+        # self.__oadp_scenario_name = 'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
         self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
@@ -812,7 +812,7 @@ class OadpWorkloads(WorkloadsOperations):
         sc = test_scenario['dataset']['sc']
         testcase_timeout = int(test_scenario['args']['testcase_timeout'])
         # generated_name for pv or namespaces
-        generated_name = test_scenario['testcase']
+        generated_name = str(test_scenario['testcase'])
         generated_name = generated_name.replace('.', '-')
         generated_name = 'perf-datagen-' + generated_name.lower() + '-' + sc[-3:]
 
@@ -1761,7 +1761,6 @@ class OadpWorkloads(WorkloadsOperations):
                 self.__oadp_scenario_data).st_size == 0:
             test_data = yaml.safe_load(Path(self.__oadp_scenario_data).read_text())
         for case in test_data['scenarios']:
-            logger.info('doing a test')
             if case['name'] == self.__oadp_scenario_name:
                 logger.info(
                     f" load_test_scenario has loaded details of scenario: {self.__oadp_scenario_name} from the yaml")
