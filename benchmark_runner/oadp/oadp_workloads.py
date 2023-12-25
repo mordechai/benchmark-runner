@@ -2205,8 +2205,82 @@ class OadpWorkloads(WorkloadsOperations):
             return validation_set_by_yaml
         return 'full'
 
+    @logger_time_stamp
+    def get_unique_namespaces(self, scenario):
+        """
+        Extract and return a list of unique namespaces from the test data.
 
+        Parameters:
+            scenario (dict): Dictionary containing the test data.
 
+        Returns:
+            list: List of unique namespaces.
+        """
+        dataset_value = scenario.get('dataset')
+        namespaces = set()
+
+        if isinstance(dataset_value, list):
+            # If dataset is a list, iterate through each element
+            for entry in dataset_value:
+                namespace = entry.get('namespace')
+                if namespace:
+                    namespaces.add(namespace)
+        elif isinstance(dataset_value, dict):
+            # If dataset is a dictionary, consider it as a single entry
+            namespace = dataset_value.get('namespace')
+            if namespace:
+                namespaces.add(namespace)
+
+        logger.info(
+            f"### INFO ### Dataset current contains {len(list(namespaces))} namespaces are related to datasets {list(namespaces)}")
+        return list(namespaces)
+
+    @logger_time_stamp
+    def are_multiple_datasets_present(self, scenario):
+        """
+        Check if the 'dataset' key contains a list and the length is greater than 1.
+
+        Parameters:
+            scenario (dict): Dictionary containing the test data.
+
+        Returns:
+            bool: True if multiple datasets are present, False otherwise.
+        """
+        dataset_value = scenario.get('dataset')
+
+        if isinstance(dataset_value, list) and len(dataset_value) > 1:
+            return True
+        elif not isinstance(dataset_value, list) and isinstance(dataset_value, dict):
+            # Check if any value in the dataset is a list
+            return any(isinstance(value, list) for value in dataset_value.values())
+
+        return False
+
+    @logger_time_stamp
+    def calc_total_pods_per_namespace(self, scenario, namespace):
+        """
+        Calculate the total number of pods per namespace.
+
+        Parameters:
+            scenario (dict): Dictionary containing the test data.
+            namespace (str): Namespace for which to calculate the total pods.
+
+        Returns:
+            int: Total number of pods for the specified namespace.
+        """
+        dataset_value = scenario.get('dataset')
+
+        if isinstance(dataset_value, list):
+            # If dataset is a list, iterate through each element
+            total_pods = sum(
+                entry.get('pods_per_ns', 0) for entry in dataset_value if entry.get('namespace') == namespace)
+        elif isinstance(dataset_value, dict):
+            # If dataset is a dictionary, consider it as a single entry
+            total_pods = dataset_value.get('pods_per_ns', 0) if dataset_value.get('namespace') == namespace else 0
+        else:
+            total_pods = 0
+        logger.info(f"### INFO ### calc_total_pods_per_namespace shows {namespace} has {total_pods}")
+        return total_pods
 
 
     @logger_time_stamp
