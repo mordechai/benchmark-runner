@@ -37,8 +37,8 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
-        self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
+        self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
+        # self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
@@ -63,6 +63,7 @@ class OadpWorkloads(WorkloadsOperations):
             'velero_cli_path': '/tmp/velero-1-12'
         }
         self.__result_dicts = []
+        self.__scenario_datasets = []
         self.__run_metadata = {
             "index": '',
             "metadata": {},
@@ -401,11 +402,28 @@ class OadpWorkloads(WorkloadsOperations):
 
         return True
 
+    @logger_time_stamp
+    def get_pod_prefix_by_dataset_role(self, ds):
+        if ds is None:
+            return None
+
+        expected_pod_name = ''
+
+        if ds['role'] == 'generator' or ds['role'] == 'dd_generator':
+            expected_pod_name = 'deploy-perf-datagen'
+        if ds['role'] == 'BusyBoxPodSingleNS.sh':
+            expected_pod_name = 'busybox-perf'
+
+        if expected_pod_name == '':
+            logger.exception(' get_pod_prefix_by_dataset_role not setting expected_pod_name its empty ')
+        logger.info(f"### get_pod_prefix_by_dataset_role returns {expected_pod_name}")
+        return expected_pod_name
+
 
     @logger_time_stamp
-    def get_status_of_pods_by_ns(self, scenario):
+    def get_status_of_pods_by_ns(self, scenario, ds):
         """ method creates dict summary of  pods by status """
-        target_namespace = scenario['args']['namespaces_to_backup']
+        target_namespace = ds['namespace']
         ns_state = {}
         for state in ['Running', 'Completed', 'CrashLoopBackOff', 'Error', 'Pending', 'ContainerCreating',
                       'Terminating', 'ImagePullBackOff', 'Init', 'Unknown']:
@@ -415,25 +433,29 @@ class OadpWorkloads(WorkloadsOperations):
         return ns_state
 
     @logger_time_stamp
-    def verify_pods_are_progressing(self, scenario, interval_between_checks=15, max_attempts=1):
+    def verify_pods_are_progressing(self, scenario, interval_between_checks=15, max_attempts=1,ds=None):
         """
         method captures pods status
         """
-        num_of_pods_expected = scenario['dataset']['pods_per_ns']
-        target_namespace = scenario['args']['namespaces_to_backup']
-        expected_size = scenario['dataset']['pv_size']
+        num_of_pods_expected = ds['pods_per_ns']
+        target_namespace = ds['namespace']
+        expected_size = ds['pv_size']
         timeout_value = int(scenario['args']['testcase_timeout'])
         try:
             running_pods = self.get_list_of_pods_by_status(namespace=target_namespace, query_operator='=',status='Running')
+            expected_pod_name = self.get_pod_prefix_by_dataset_role(ds)
+            if expected_pod_name is not None:
+                running_pods = [element for element in running_pods if expected_pod_name in element]
+                logger.info(f'### INFO ### verify_pods_are_progressing: found {len(running_pods)} that contain name {expected_pod_name}')
             if len(running_pods) == num_of_pods_expected:
                 return False
             else:
                 total_attempts = 0
                 while total_attempts < max_attempts:
-                    status_of_pods = self.get_status_of_pods_by_ns(scenario)
+                    status_of_pods = self.get_status_of_pods_by_ns(scenario,ds)
                     logger.info(f":: INFO :: verify_pods_are_progressing: pausing for {interval_between_checks} ")
                     time.sleep(int(interval_between_checks))
-                    current_status_of_pods = self.get_status_of_pods_by_ns(scenario)
+                    current_status_of_pods = self.get_status_of_pods_by_ns(scenario,ds)
                     are_status_of_pods_the_same = self.compare_dicts(status_of_pods, current_status_of_pods)
                     number_of_running_pods_increased = current_status_of_pods['Running'] > status_of_pods['Running']
                     number_of_running_pods_already_at_desired_state = current_status_of_pods['Running'] == num_of_pods_expected
@@ -459,18 +481,23 @@ class OadpWorkloads(WorkloadsOperations):
             logger.warn(f':: WARN :: in verify_pods_are_progressing  raised an exception {err}')
 
     @logger_time_stamp
-    def waiting_for_ns_to_reach_desired_pods(self, scenario):
+    def waiting_for_ns_to_reach_desired_pods(self, scenario, ds):
         """
         This method verifies number of pods in namespace are in running state
         :return:
         """
-        num_of_pods_expected = scenario['dataset']['pods_per_ns']
-        target_namespace = scenario['args']['namespaces_to_backup']
-        expected_size = scenario['dataset']['pv_size']
+        num_of_pods_expected = ds['pods_per_ns']
+        target_namespace = ds['namespace']
+        expected_size = ds['pv_size']
         timeout_value = int(scenario['args']['testcase_timeout'])
         try:
             running_pods = self.get_list_of_pods_by_status(namespace=target_namespace, query_operator='=',status='Running')
-            logger.info(f':: INFO :: waiting_for_ns_to_reach_desired_pods: {target_namespace} has  {len(running_pods)} in running state, out of total desired: {num_of_pods_expected}')
+            expected_pod_name = self.get_pod_prefix_by_dataset_role(ds)
+            if expected_pod_name is None:
+                logger.error("### ERROR ### waiting_for_ns_to_reach_desired_pods: Bad Pod Prefix, attempted to check for pods using expected_pod_prefix returned from get_pod_prefix_by_dataset_role was None ")
+                logger.exception("get_pod_prefix_by_dataset_role getting bad pod prefix")
+            running_pods = [element for element in running_pods if expected_pod_name in element]
+            logger.info(f':: INFO :: waiting_for_ns_to_reach_desired_pods: {target_namespace} has  {len(running_pods)} in running state, out of total desired: {num_of_pods_expected} ')
 
             if len(running_pods) == num_of_pods_expected:
                 return True
@@ -480,13 +507,19 @@ class OadpWorkloads(WorkloadsOperations):
                 return False
             else:
                 logger.info (f"interval_between_checks=self.__retry_logic['interval_between_checks'] is {self.__retry_logic['interval_between_checks']}")
-                pods_progressing = self.verify_pods_are_progressing(scenario=scenario, interval_between_checks=self.__retry_logic['interval_between_checks'], max_attempts=self.__retry_logic['max_attempts'])
+                pods_progressing = self.verify_pods_are_progressing(scenario=scenario, interval_between_checks=self.__retry_logic['interval_between_checks'], max_attempts=self.__retry_logic['max_attempts'], ds=ds)
                 if not pods_progressing:
                     return False
                 else:
                     current_wait_time = 0
                     while current_wait_time <= int(timeout_value):
                         running_pods = self.get_list_of_pods_by_status(namespace=target_namespace, query_operator='=',status='Running')
+                        expected_pod_name = self.get_pod_prefix_by_dataset_role(ds)
+                        if expected_pod_name is None:
+                            logger.error(
+                                "### ERROR ### waiting_for_ns_to_reach_desired_pods: Bad Pod Prefix, attempted to check for pods using expected_pod_prefix returned from get_pod_prefix_by_dataset_role was None ")
+                            logger.exception("get_pod_prefix_by_dataset_role getting bad pod prefix")
+                        running_pods = [element for element in running_pods if expected_pod_name in element]
                         logger.info(f':: INFO :: waiting_for_ns_to_reach_desired_pods: {target_namespace} has  {len(running_pods)} in running state, out of total desired: {num_of_pods_expected}')
                         if len(running_pods) == num_of_pods_expected:
                             return True
@@ -698,17 +731,17 @@ class OadpWorkloads(WorkloadsOperations):
         return True
 
     @logger_time_stamp
-    def busybox_dataset_creation(self, scenario):
+    def busybox_dataset_creation(self, scenario, ds):
         """
         method scales up single NS with busybox pods and oc assets
         updated to allow for concurrent creation of 50 instances each creation 10 pods per busybox instance
         if 50 instances reached then necessary to sleep 6 mins to allow for system to recover
         """
-        num_of_assets_desired = scenario['dataset']['pods_per_ns']
-        target_namespace = scenario['args']['namespaces_to_backup']
-        pv_size =  scenario['dataset']['pv_size']
-        storage = scenario['dataset']['sc']
-        role = scenario['dataset']['role']
+        num_of_assets_desired = ds['pods_per_ns']
+        target_namespace = ds['namespace']
+        pv_size = ds['pv_size']
+        storage = ds['sc']
+        role = ds['role']
         dataset_creation_log = os.path.join(self._run_artifacts_path, 'dataset_creation.log')
         self.oadp_timer(action="start", transaction_name='dataset_creation')
         start = 1
@@ -719,7 +752,7 @@ class OadpWorkloads(WorkloadsOperations):
             if end > num_of_assets_desired:
                 end = num_of_assets_desired
             logger.info(f":: INFO :: busybox_dataset_creation: executing {self.__oadp_path}/{role} {num_of_assets_desired} {pv_size} {storage} '' {start} {end} >> {dataset_creation_log}")
-            self.__ssh.run(cmd=f"{self.__oadp_path}/{role} {num_of_assets_desired} {pv_size} {storage} '' {start} {end} >> {dataset_creation_log}", background=True)
+            self.__ssh.run(cmd=f"{self.__oadp_path}/{role} {num_of_assets_desired} {pv_size} {storage} {target_namespace} {start} {end} >> {dataset_creation_log}", background=True)
 
             start += 10
             end += 10
@@ -734,7 +767,7 @@ class OadpWorkloads(WorkloadsOperations):
                     logger.info(f":: INFO :: busybox_dataset_creation: pods are no longer progressing next batch can start if appplicable")
         logger.info(f":: INFO :: busybox_dataset_creation: loop has executed 10 times now sleeping for 1 min executing {self.__oadp_path}/{role} {num_of_assets_desired} {pv_size} {storage} '' {start} {end}  >> {dataset_creation_log}")
         self.oadp_timer(action="stop", transaction_name='dataset_creation')
-        pods_ready = self.waiting_for_ns_to_reach_desired_pods(scenario=scenario)
+        pods_ready = self.waiting_for_ns_to_reach_desired_pods(scenario=scenario,ds=ds)
         if not pods_ready:
             logger.error(
                 f"::: ERROR :: busybox_dataset_creation - expected pods running should be {num_of_assets_desired}")
@@ -743,34 +776,35 @@ class OadpWorkloads(WorkloadsOperations):
                 f"::: INFO :: busybox_dataset_creation - successfully created {num_of_assets_desired}")
 
     @logger_time_stamp
-    def create_source_dataset(self, scenario):
+    def create_all_datasets(self, scenario):
+        if not self.__scenario_datasets:
+            logger.error(f"### ERROR ### Datasets are either not present or were not parsed from the {scenario.name} correctly as self.__scenario_datasets is empty")
+            logger.exception("Please check your datasets defined in your yaml as no datasets were loaded into self.__scenario_datasets")
+        for ns in self.ds_get_all_namespaces():
+            for ds in self.ds_get_datasets_for_namespace(namespace=ns):
+                logger.info(f"create_dataset will begin creating dataset for ns {ns} that has a total datasets of: {ds}")
+                self.create_source_dataset(scenario,ds)
+                logger.info(f"### INFO ### create_dataset completed adding pods of type {ds['role']} that created {ds['pods_per_ns']} pods in  ns {ns}  related info is {ds}")
+
+
+    @logger_time_stamp
+    def create_source_dataset(self, scenario, ds=None):
         """
         This method creates dataset for oadp to work against
         :return:
         """
-        num_of_assets_desired = scenario['dataset']['pods_per_ns']
-        target_namespace = scenario['args']['namespaces_to_backup']
-        pv_size = scenario['dataset']['pv_size']
-        storage = scenario['dataset']['sc']
-        role = scenario['dataset']['role']
-        # setting retry logic from dataset creation
+        if not ds:
+            logger.error(
+                f"### ERROR ### create_source_dataset is showing ds as empty meaning datasets are either not present or were not parsed from the {scenario.name} correctly as self.__scenario_datasets is empty")
+            logger.exception( "create_source_dataset: Please check your datasets defined in your yaml as no datasets were loaded into self.__scenario_datasets")
         self.__retry_logic = {
             'interval_between_checks': 15,
             'max_attempts': 20
         }
-        #
-        # # check whether current NS already exists
-        # check_ns_presence = self.__ssh.run(cmd=f'oc get ns {target_namespace}')
-        # if check_ns_presence.find('not found') < 0:
-        #     # delete ns with same name
-        #     logger.warn(f"NS {target_namespace} with same name already exists and will be remoed")
-        #     check_ns_presence = self.__ssh.run(cmd=f'oc delete ns {target_namespace}')
-        #     if check_ns_presence.find('deleted') < 0:
-        #         logger.exception("Unable to remove NS {ns} when attempting to clean up before populating NS likely same ns exists on different storage")
-        if role == 'BusyBoxPodSingleNS.sh':
-            self.busybox_dataset_creation(scenario)
-        if role == 'generator' or role == 'dd_generator':
-            self.create_multi_pvutil_dataset(scenario)
+        if ds['role'] == 'BusyBoxPodSingleNS.sh':
+            self.busybox_dataset_creation(scenario, ds)
+        if ds['role'] == 'generator' or ds['role'] == 'dd_generator':
+            self.create_multi_pvutil_dataset(scenario, ds)
 
 
     @logger_time_stamp
@@ -799,17 +833,17 @@ class OadpWorkloads(WorkloadsOperations):
             return False
 
     @logger_time_stamp
-    def create_multi_pvutil_dataset(self, test_scenario):
+    def create_multi_pvutil_dataset(self, test_scenario, ds):
         # common vars between roles
-        active_role = test_scenario['dataset']['role']
-        playbook_path = test_scenario['dataset']['playbook_path']
-        pvc_size = test_scenario['dataset']['pv_size']
-        dataset_path = test_scenario['dataset']['dataset_path']
-        num_of_pods_expected = test_scenario['dataset']['pods_per_ns']
+        active_role = ds['role']
+        playbook_path = ds['playbook_path']
+        pvc_size = ds['pv_size']
+        dataset_path = ds['dataset_path']
+        num_of_pods_expected = ds['pods_per_ns']
         create_data_ansible_output_responses = []
-        mount_point = test_scenario['dataset']['dataset_path']
-        namespace = test_scenario['args']['namespaces_to_backup']
-        sc = test_scenario['dataset']['sc']
+        mount_point = ds['dataset_path']
+        namespace = ds['namespace']
+        sc = ds['sc']
         testcase_timeout = int(test_scenario['args']['testcase_timeout'])
         # generated_name for pv or namespaces
         generated_name = str(test_scenario['testcase'])
@@ -821,16 +855,16 @@ class OadpWorkloads(WorkloadsOperations):
             pvc_name = 'pvc-' + generated_name + '-' + str(i)
             deployment_name = 'deploy-' + generated_name + '-' + str(i)
             if active_role == 'generator':
-                dir_count = test_scenario['dataset']['dir_count']
-                files_count = test_scenario['dataset']['files_count']
-                file_size = test_scenario['dataset']['files_size']
-                dept_count = test_scenario['dataset']['dept_count']
+                dir_count = ds['dir_count']
+                files_count = ds['files_count']
+                file_size = ds['files_size']
+                dept_count = ds['dept_count']
                 playbook_extra_var = (
                     f"dir_count={dir_count}  files_count={files_count}  files_size={file_size}  dept_count={dept_count}  pvc_size={pvc_size} deployment_name={deployment_name} dataset_path={dataset_path} namespace={namespace} pvc_name={pvc_name} sc={sc}")
 
             if active_role == 'dd_generator':
-                bs = test_scenario['dataset']['bs']
-                count = test_scenario['dataset']['count']
+                bs = ds['bs']
+                count = ds['count']
                 playbook_extra_var = (
                     f"bs={bs} count={count}  pvc_size={pvc_size}  deployment_name={deployment_name} dataset_path={dataset_path} namespace={namespace} pvc_name={pvc_name} sc={sc}")
 
@@ -851,7 +885,7 @@ class OadpWorkloads(WorkloadsOperations):
         # Verify pods in run state that are executing population on their pvs match expected numbers
         # Previous check was for execution of ansible this check is for the pods which are in run state
         #pods_ready_for_pv_util_validation = self.verify_running_pods(num_of_pods_expected=num_of_pods_expected, target_namespace=namespace)
-        pods_ready_for_pv_util_validation = self.waiting_for_ns_to_reach_desired_pods(scenario=test_scenario)
+        pods_ready_for_pv_util_validation = self.waiting_for_ns_to_reach_desired_pods(scenario=test_scenario, ds=ds)
         if not pods_ready_for_pv_util_validation:
             logger.error(f":: ERROR :: create_multi_pvutil_dataset: Inside waiting_for_ns_to_reach_desired_pods returned false since number of created pods not match expected pods that should be running totaling {num_of_pods_expected}")
         else:
@@ -888,10 +922,10 @@ class OadpWorkloads(WorkloadsOperations):
                 return False
 
     @logger_time_stamp
-    def get_pod_pv_utilization_info_by_podname(self, test_scenario, podname):
+    def get_pod_pv_utilization_info_by_podname(self, test_scenario, podname,ds):
         results_capacity_usage = {}
-        active_role = test_scenario['dataset']['role']
-        mount_point = test_scenario['dataset']['dataset_path']
+        active_role = ds['role']
+        mount_point = ds['dataset_path']
         namespace = test_scenario['args']['namespaces_to_backup']
         disk_capacity = self.__ssh.run(
             cmd=f"oc  exec -it -n{namespace} {podname} -- /bin/bash -c \"du -sh {mount_point}\"")
@@ -910,10 +944,10 @@ class OadpWorkloads(WorkloadsOperations):
         logger.info(f"get_pod_pv_utilization_info saw pv contained: {results_capacity_usage}")
 
     @logger_time_stamp
-    def get_pod_pv_utilization_info_by_podname(self, test_scenario, podname):
+    def get_pod_pv_utilization_info_by_podname(self, test_scenario, podname, ds):
         results_capacity_usage = {}
-        active_role = test_scenario['dataset']['role']
-        mount_point = test_scenario['dataset']['dataset_path']
+        active_role = ds['role']
+        mount_point = ds['dataset_path']
         namespace = test_scenario['args']['namespaces_to_backup']
         disk_capacity = self.__ssh.run(
             cmd=f"oc  exec -it -n{namespace} {podname} -- /bin/bash -c \"du -sh {mount_point}\"")
@@ -933,10 +967,10 @@ class OadpWorkloads(WorkloadsOperations):
         return results_capacity_usage
 
     @logger_time_stamp
-    def get_pod_pv_utilization_info(self, test_scenario):
+    def get_pod_pv_utilization_info(self, test_scenario, ds):
         results_capacity_usage = {}
-        active_role = test_scenario['dataset']['role']
-        mount_point = test_scenario['dataset']['dataset_path']
+        active_role = ds['role']
+        mount_point = ds['dataset_path']
         namespace = test_scenario['args']['namespaces_to_backup']
         podname = self.__ssh.run(cmd=f"oc get pods -o custom-columns=POD:.metadata.name --no-headers -n{namespace}")
         disk_capacity = self.__ssh.run(cmd=f"oc  exec -it -n{namespace} {podname} -- /bin/bash -c \"du -sh {mount_point}\"")
@@ -954,42 +988,42 @@ class OadpWorkloads(WorkloadsOperations):
         return results_capacity_usage
 
     @logger_time_stamp
-    def pv_contains_expected_data(self, test_scenario, pv_util_details_returned_by_pod):
+    def pv_contains_expected_data(self, test_scenario, pv_util_details_returned_by_pod, ds):
         """
         method compares data returned from get_pod_pv_utilization_info against data from the yaml
         """
-        if (pv_util_details_returned_by_pod['disk_capacity'] != test_scenario['dataset']['expected_capacity']):
-            logger.warning(f":: ERROR :: pv_contains_expected_data disk_capacity FAILED comparison pod returned: {pv_util_details_returned_by_pod['disk_capacity']} yaml expected: {test_scenario['dataset']['expected_capacity']}")
+        if (pv_util_details_returned_by_pod['disk_capacity'] != ds['expected_capacity']):
+            logger.warning(f":: ERROR :: pv_contains_expected_data disk_capacity FAILED comparison pod returned: {pv_util_details_returned_by_pod['disk_capacity']} yaml expected: {ds['expected_capacity']}")
             return False
         else:
-            logger.info(f":: INFO :: pv_contains_expected_data: disk_capacity returned by pod: {pv_util_details_returned_by_pod['disk_capacity']} matches what yaml expected: {test_scenario['dataset']['expected_capacity']}")
+            logger.info(f":: INFO :: pv_contains_expected_data: disk_capacity returned by pod: {pv_util_details_returned_by_pod['disk_capacity']} matches what yaml expected: {ds['expected_capacity']}")
 
-        total_expected_files_assuming_its_per_by_folder = (int(test_scenario['dataset']['files_count']) * test_scenario['dataset']['dir_count'])
-        total_expected_files_assuming_its_already_the_raw_total = int(test_scenario['dataset']['files_count'])
+        total_expected_files_assuming_its_per_by_folder = (int(ds['files_count']) * ds['dir_count'])
+        total_expected_files_assuming_its_already_the_raw_total = int(ds['files_count'])
         if not (total_expected_files_assuming_its_per_by_folder == int(pv_util_details_returned_by_pod['files_count']) ) and not (total_expected_files_assuming_its_already_the_raw_total == int(pv_util_details_returned_by_pod['files_count'])):
-            logger.warning(f":: ERROR :: pv_contains_expected_data files_count FAILED comparison pod returned: {pv_util_details_returned_by_pod['files_count']} yaml expected: {test_scenario['dataset']['files_count']} when total_expected_files_assuming_its_per_by_folder: {total_expected_files_assuming_its_per_by_folder}")
+            logger.warning(f":: ERROR :: pv_contains_expected_data files_count FAILED comparison pod returned: {pv_util_details_returned_by_pod['files_count']} yaml expected: {ds['files_count']} when total_expected_files_assuming_its_per_by_folder: {total_expected_files_assuming_its_per_by_folder}")
             return False
         else:
-            logger.info(f":: INFO :: pv_contains_expected_data: files_count comparison succeeded pod returned: {pv_util_details_returned_by_pod['files_count']} yaml expected: {test_scenario['dataset']['files_count']} or when total_expected_files_assuming_its_per_by_folder: {total_expected_files_assuming_its_per_by_folder}")
-        if (int(pv_util_details_returned_by_pod['folders_count']) != test_scenario['dataset']['dir_count']):
-            logger.warning(f":: ERROR :: pv_contains_expected_data folders_count failed comparison pod returned: {pv_util_details_returned_by_pod['folders_count']} yaml expected: {test_scenario['dataset']['dir_count']}")
+            logger.info(f":: INFO :: pv_contains_expected_data: files_count comparison succeeded pod returned: {pv_util_details_returned_by_pod['files_count']} yaml expected: {ds['files_count']} or when total_expected_files_assuming_its_per_by_folder: {total_expected_files_assuming_its_per_by_folder}")
+        if (int(pv_util_details_returned_by_pod['folders_count']) != ds['dir_count']):
+            logger.warning(f":: ERROR :: pv_contains_expected_data folders_count failed comparison pod returned: {pv_util_details_returned_by_pod['folders_count']} yaml expected: {ds['dir_count']}")
             return False
         else:
-            logger.info(f":: INFO :: pv_contains_expected_data folders_count comparison succeeded: pod returned: {pv_util_details_returned_by_pod['folders_count']} yaml expected: {test_scenario['dataset']['dir_count']}")
+            logger.info(f":: INFO :: pv_contains_expected_data folders_count comparison succeeded: pod returned: {pv_util_details_returned_by_pod['folders_count']} yaml expected: {ds['dir_count']}")
         logger.info(f':: INFO :: pv_contains_expected_data is returning True based on pv_util_details_returned_by_pod')
         return True
 
 
 
     @logger_time_stamp
-    def get_expected_files_count(self, test_scenario):
+    def get_expected_files_count(self, test_scenario, ds):
         results_capacity_expected = {}
         import math
-        active_role = test_scenario['dataset']['role']
-        dir_count = test_scenario['dataset']['dir_count'] # -n
-        files_count = test_scenario['dataset']['files_count'] # -f
-        dept_count = test_scenario['dataset']['dept_count'] # -d
-        file_size = test_scenario['dataset']['files_size'] # -s
+        active_role = ds['role']
+        dir_count = ds['dir_count'] # -n
+        files_count = ds['files_count'] # -f
+        dept_count = ds['dept_count'] # -d
+        file_size = ds['files_size'] # -s
         if active_role == 'generator':
             countdir = 0
             for k in range(dept_count):
@@ -1004,8 +1038,8 @@ class OadpWorkloads(WorkloadsOperations):
             logger.info(f"{total_folders} {total_files}")
             logger.info(results_capacity_expected)
         elif active_role == 'dd_generator':
-             bs = test_scenario['dataset']['bs']
-             count = test_scenario['dataset']['count']
+             bs = ds['bs']
+             count = ds['count']
              current_file_size = bs * count
         return results_capacity_expected
 
@@ -2257,7 +2291,33 @@ class OadpWorkloads(WorkloadsOperations):
         return False
 
     @logger_time_stamp
-    def calc_total_pods_per_namespace(self, scenario, namespace):
+    def calc_total_pods_per_namespace_in_datasets(self, scenario, namespace):
+        """
+        Calculate the total number of pods per namespace.
+
+        Parameters:
+            scenario (dict): Dictionary containing the test data.
+            namespace (str): Namespace for which to calculate the total pods.
+
+        Returns:
+            int: Total number of pods for the specified namespace.
+        """
+        dataset_value = scenario.get('dataset')
+
+        if isinstance(dataset_value, list):
+            # If dataset is a list, iterate through each element
+            total_pods = sum(
+                entry.get('pods_per_ns', 0) for entry in dataset_value if entry.get('namespace') == namespace)
+        elif isinstance(dataset_value, dict):
+            # If dataset is a dictionary, consider it as a single entry
+            total_pods = dataset_value.get('pods_per_ns', 0) if dataset_value.get('namespace') == namespace else 0
+        else:
+            total_pods = 0
+        logger.info(f"### INFO ### calc_total_pods_per_namespace shows {namespace} has {total_pods}")
+        return total_pods
+
+    @logger_time_stamp
+    def calc_total_pods_per_namespace_in_datasets(self, scenario, namespace):
         """
         Calculate the total number of pods per namespace.
 
@@ -2283,17 +2343,168 @@ class OadpWorkloads(WorkloadsOperations):
         return total_pods
 
 
+
     @logger_time_stamp
-    def validate_dataset(self, scenario):
+    def load_datasets_for_scenario(self, scenario):
+        # Extract information from the scenario and add to scenario_datasets
+        all_datasets = []
+
+        # Check if 'dataset' is a list of dictionaries
+        if isinstance(scenario['dataset'], list):
+            # Iterate through each dataset in the list
+            for dataset in scenario['dataset']:
+                # Extract 'namespace' from the dataset or provide an empty string if not present
+                namespace = dataset.get('namespace', "")
+
+                # Check if the namespace already exists in the list_of_datasets_which_belong_to_this_namespace
+                existing_namespace_index = next((i for i, s in enumerate(all_datasets) if s['namespace'] == namespace),
+                                                None)
+
+                if existing_namespace_index is not None:
+                    # Update existing entry in all_datasets
+                    existing_entry = all_datasets[existing_namespace_index]
+                    existing_entry['total_datasets_for_this_namespace'] += 1
+                    existing_entry['total_pods_per_all_datasets_with_same_namespace'] += dataset['pods_per_ns']
+                    existing_entry['list_of_datasets_which_belong_to_this_namespace'].append(
+                        self._process_dataset(dataset, namespace))
+                else:
+                    # Add a new entry to all_datasets
+                    summary = {
+                        'namespace': namespace,
+                        'total_datasets_for_this_namespace': 1,
+                        'total_pods_per_all_datasets_with_same_namespace': dataset['pods_per_ns'],
+                        'list_of_datasets_which_belong_to_this_namespace': [self._process_dataset(dataset, namespace)],
+                        'all_ds_exists': False,
+                        'all_ds_validated': False
+                    }
+                    all_datasets.append(summary)
+        elif isinstance(scenario['dataset'], dict):
+            # Scenario where dataset is a single dictionary
+            namespace = scenario['args'].get('namespaces_to_backup', "")
+            all_datasets.append(self._process_dataset(scenario['dataset'], namespace))
+
+        # Check if all datasets in the scenario have 'exists' and 'validated' as True
+        exists = all(all(ds['exists'] for ds in dataset['list_of_datasets_which_belong_to_this_namespace']) for dataset in all_datasets)
+        validated = all(all(ds['validated'] for ds in dataset['list_of_datasets_which_belong_to_this_namespace']) for dataset in all_datasets)
+
+        # Check if the namespace already exists in scenario_datasets
+        existing_namespace_index = next((i for i, s in enumerate(self.__scenario_datasets)
+                                         if s['namespace'] == namespace), None)
+
+        # if existing_namespace_index is not None:
+        #     # Update existing entry in scenario_datasets
+        #     existing_entry = self.__scenario_datasets[existing_namespace_index]
+        #     existing_entry['total_datasets_for_this_namespace'] += len(all_datasets)
+        #     existing_entry['total_pods_per_all_datasets_with_same_namespace'] += sum(
+        #         ds['pods_per_ns'] for ds in all_datasets)
+        #     existing_entry['list_of_datasets_which_belong_to_this_namespace'].extend(all_datasets)
+        #     existing_entry['all_ds_exists'] = existing_entry['all_ds_exists'] and exists
+        #     existing_entry['all_ds_validated'] = existing_entry['all_ds_validated'] and validated
+        # else:
+        #     # Add a new entry to scenario_datasets
+        #     summary = {
+        #         'namespace': namespace,
+        #         'total_datasets_for_this_namespace': len(all_datasets),
+        #         'total_pods_per_all_datasets_with_same_namespace': sum(ds['pods_per_ns'] for ds in all_datasets),
+        #         'list_of_datasets_which_belong_to_this_namespace': all_datasets,
+        #         'all_ds_exists': exists,
+        #         'all_ds_validated': validated
+        #     }
+        # self.__scenario_datasets.append(summary)
+        self.__scenario_datasets = all_datasets
+
+    def ds_get_datasets_for_namespace(self, namespace):
+        # Return list_of_datasets_which_belong_to_this_namespace for the specified namespace
+        return next((s['list_of_datasets_which_belong_to_this_namespace'] for s in self.__scenario_datasets
+                     if s['namespace'] == namespace), [])
+
+    def ds_get_total_datasets_for_namespace(self, namespace):
+        # Return total_datasets_for_this_namespace for the specified namespace
+        return next((s['total_datasets_for_this_namespace'] for s in self.__scenario_datasets
+                     if s['namespace'] == namespace), 0)
+
+    def ds_get_all_namespaces(self):
+        # Return a list of all unique namespaces in scenario_datasets
+        return [s['namespace'] for s in self.__scenario_datasets]
+
+    def ds_get_datasets_for_namespace_with_status(self, namespace, exists=None, validated=None):
+        # Return datasets for the specified namespace with optional filtering by 'exists' and 'validated'
+        datasets = next((s['list_of_datasets_which_belong_to_this_namespace'] for s in self.__scenario_datasets
+                         if s['namespace'] == namespace), [])
+
+        if exists is not None or validated is not None:
+            # Filter datasets based on 'exists' and 'validated' criteria if provided
+            filtered_datasets = [ds for ds in datasets if
+                                 (exists is None or ds['exists'] == exists) and
+                                 (validated is None or ds['validated'] == validated)]
+            return filtered_datasets
+        else:
+            return datasets
+
+    def _process_dataset(self, dataset, namespace):
+        # Add 'exists' and 'validated' keys to each dataset
+        return {**dataset, 'namespace': namespace, 'exists': False, 'validated': False}
+
+    @logger_time_stamp
+    def validate_expected_datasets(self, scenario):
+        """
+        method will itterate through listed datasets supplied in tests.yaml
+        it will invoke validation per supplied dataset
+        its expected that dataset may be in
+        1) legacy format as dict key/value format
+        2) as a list item in the updated format
+        """
+        dataset_value = scenario.get('dataset')
+        if isinstance(dataset_value, list):
+            logger.info("### INFO ### validate_expected_datasets identified dataset in list format")
+            total_ds = len(scenario['dataset'])
+            validated = 0
+            validations_attempted = 0
+            ns_failing_validation = []
+            for ds in scenario['dataset']:
+                logger.info(f"### INFO ### validate_expected_datasets attempting to validate dataset {validations_attempted} of {total_ds} ")
+                logger.info(f"### INFO ### validate_expected_datasets for {ds['namespace']} with {ds}")
+                validation_status = self.validate_dataset(scenario, ds)
+                logger.info(f"### INFO ### validate_expected_datasets shows status: {validation_status} for {ds['namespace']}")
+                if validation_status:
+                    validated = validated + 1
+                else:
+                    ns_failing_validation.append(ds['namespace'])
+                    logger.warning(f"### WARN ### DS validation for multiple datasets was not successful for  {ds['namespace']}")
+                validations_attempted = validations_attempted + 1
+            if validated != total_ds:
+                logger.error(f"### ERROR ### validate_expected_datasets: Datasets validated: {validated} expected: {total_ds} namespaces failing validation were: {ns_failing_validation}")
+            else:
+                logger.info(f"### INFO ### validate_expected_datasets: Datasets validated: {validated} expected: {total_ds} namespaces, validations were successful")
+        else:
+            ds = scenario['dataset']
+            # Handle legacy/dict formating where 'namespace' wouldn't exist but namespaces_to_backup does
+            ds['namespace'] = scenario['args']['namespaces_to_backup']
+            logger.info(f"### INFO ### validate_expected_datasets for {ds['namespace']} with {ds} - legacy format using dict detected")
+            validation_status = self.validate_dataset(scenario, ds)
+            if validation_status:
+                logger.info(f"### INFO ### validate_expected_datasets status: {validation_status} for {ds['namespace']} validations was successful")
+            else:
+                logger.error(f"### ERROR ### validate_expected_datasets status: {validation_status} for {ds['namespace']} validation has FAILED")
+
+    @logger_time_stamp
+    def validate_dataset(self, scenario, ds):
         """
         method verifies dataset pod, pv size, sc, and pv contents (utilization of mount, file & folder counts where relevant.)
         returns boolean representing state of dataset present vs whats expected.
         """
-        num_of_pods_expected = scenario['dataset']['pods_per_ns']
-        target_namespace = scenario['args']['namespaces_to_backup']
-        expected_size = scenario['dataset']['pv_size']
-        expected_sc = scenario['dataset']['sc']
-        role = scenario['dataset']['role']
+        dataset_value = scenario.get('dataset')
+        # check if datasets are stored as list or using old dict key/value format
+        if isinstance(dataset_value, list):
+            logger.info("### INFO ### validate_expected_datasets identified dataset in list format")
+            num_of_pods_expected = self.calc_total_pods_per_namespace_in_datasets(scenario, namespace=ds['namespace'])
+        else:
+            num_of_pods_expected = scenario['dataset']['pods_per_ns']
+
+        target_namespace = ds['namespace']
+        expected_size = ds['pv_size']
+        expected_sc = ds['sc']
+        role = ds['role']
         skip_dataset_validation = scenario['args'].get('skip_source_dataset_check', False)
         dataset_validation_mode = self.get_dataset_validation_mode(scenario)
         timeout_value = scenario['args']['testcase_timeout']
@@ -2307,12 +2518,12 @@ class OadpWorkloads(WorkloadsOperations):
                 logger.warn(f'validate_dataset returning false for pod_presence_and_storage_as_expected: value is: {pod_presence_and_storage_as_expected}')
                 return False
         if dataset_validation_mode == 'light':
-            pod_presence_and_storage_as_expected = self.waiting_for_ns_to_reach_desired_pods(scenario)
+            pod_presence_and_storage_as_expected = self.waiting_for_ns_to_reach_desired_pods(scenario,ds)
             if not pod_presence_and_storage_as_expected:
                 logger.warn(f'validate_dataset returning false for pod_presence_and_storage_as_expected: value is: {pod_presence_and_storage_as_expected}')
                 return False
         if dataset_validation_mode == 'none':
-            pod_presence_and_storage_as_expected = self.waiting_for_ns_to_reach_desired_pods(scenario)
+            pod_presence_and_storage_as_expected = self.waiting_for_ns_to_reach_desired_pods(scenario, ds)
             logger.warn(f'validate_dataset is set to none -  NO validation will be performed')
         # Validation for pods created with some data on them
         if role == 'generator':
@@ -2431,6 +2642,13 @@ class OadpWorkloads(WorkloadsOperations):
        """
        # Load Scenario Details
        test_scenario = self.load_test_scenario()
+       self.load_datasets_for_scenario(scenario=test_scenario)
+
+       # edit zone
+       self.create_all_datasets(test_scenario)
+
+
+       # edit zone
 
        # Verify no left over test results
        self.remove_previous_run_report()
