@@ -37,7 +37,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
+        self.__oadp_scenario_name = 'backup-csi-datagen-single-ns-100pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
         # self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
@@ -410,10 +410,12 @@ class OadpWorkloads(WorkloadsOperations):
         expected_pod_name = ''
 
         if ds['role'] == 'generator' or ds['role'] == 'dd_generator':
-            expected_pod_name = 'deploy-perf-datagen'
+            expected_pod_name = f"{ds['pv_size']}-{ds['pods_per_ns']}"
+            expected_pod_name = expected_pod_name.replace('.', '-')
+            expected_pod_name = expected_pod_name.lower()
+            # expected_pod_name = 'deploy-perf-datagen'
         if ds['role'] == 'BusyBoxPodSingleNS.sh':
             expected_pod_name = 'busybox-perf'
-
         if expected_pod_name == '':
             logger.exception(' get_pod_prefix_by_dataset_role not setting expected_pod_name its empty ')
         logger.info(f"### get_pod_prefix_by_dataset_role returns {expected_pod_name}")
@@ -737,6 +739,7 @@ class OadpWorkloads(WorkloadsOperations):
         updated to allow for concurrent creation of 50 instances each creation 10 pods per busybox instance
         if 50 instances reached then necessary to sleep 6 mins to allow for system to recover
         """
+        logger.info(f"### INFO ### busybox_dataset_creation: ds is {ds}")
         num_of_assets_desired = ds['pods_per_ns']
         target_namespace = ds['namespace']
         pv_size = ds['pv_size']
@@ -776,6 +779,16 @@ class OadpWorkloads(WorkloadsOperations):
                 f"::: INFO :: busybox_dataset_creation - successfully created {num_of_assets_desired}")
 
     @logger_time_stamp
+    def print_all_ds(self,scenario):
+        if not self.__scenario_datasets:
+            logger.error(f"### ERROR ### Datasets are either not present or were not parsed from the {scenario.name} correctly as self.__scenario_datasets is empty")
+            logger.exception("Please check your datasets defined in your yaml as no datasets were loaded into self.__scenario_datasets")
+
+        for ns in self.ds_get_all_namespaces():
+            for ds in self.ds_get_datasets_for_namespace(namespace=ns):
+                logger.info(f"dataset for ns {ns} that has a total datasets of: {self.ds_get_total_datasets_for_namespace(namespace=ns)} {ds['pods_per_ns']} pods in  ns {ns}  related info is {ds}")
+
+    @logger_time_stamp
     def create_all_datasets(self, scenario):
         if not self.__scenario_datasets:
             logger.error(f"### ERROR ### Datasets are either not present or were not parsed from the {scenario.name} correctly as self.__scenario_datasets is empty")
@@ -801,6 +814,7 @@ class OadpWorkloads(WorkloadsOperations):
             'interval_between_checks': 15,
             'max_attempts': 20
         }
+        logger.info(f"### INFO ### create_source_dataset: ds is {ds}")
         if ds['role'] == 'BusyBoxPodSingleNS.sh':
             self.busybox_dataset_creation(scenario, ds)
         if ds['role'] == 'generator' or ds['role'] == 'dd_generator':
@@ -846,10 +860,11 @@ class OadpWorkloads(WorkloadsOperations):
         sc = ds['sc']
         testcase_timeout = int(test_scenario['args']['testcase_timeout'])
         # generated_name for pv or namespaces
-        generated_name = str(test_scenario['testcase'])
+        generated_name = str(test_scenario['testcase']) + f'-{pvc_size}-{num_of_pods_expected}'
         generated_name = generated_name.replace('.', '-')
         generated_name = 'perf-datagen-' + generated_name.lower() + '-' + sc[-3:]
 
+        logger.info(f"### INFO ### create_multi_pvutil_dataset: ds is {ds}")
         # Create Pods via Ansible population flow
         for i in range(num_of_pods_expected):
             pvc_name = 'pvc-' + generated_name + '-' + str(i)
@@ -890,6 +905,12 @@ class OadpWorkloads(WorkloadsOperations):
             logger.error(f":: ERROR :: create_multi_pvutil_dataset: Inside waiting_for_ns_to_reach_desired_pods returned false since number of created pods not match expected pods that should be running totaling {num_of_pods_expected}")
         else:
             running_pods = self.get_list_of_pods(namespace=namespace)
+            expected_pod_name = self.get_pod_prefix_by_dataset_role(ds)
+            if expected_pod_name is None:
+                logger.error(
+                    "### ERROR ### create_multi_pvutil_dataset: Bad Pod Prefix, attempted to check for pods using expected_pod_prefix returned from get_pod_prefix_by_dataset_role was None ")
+                logger.exception("get_pod_prefix_by_dataset_role getting bad pod prefix")
+            running_pods = [element for element in running_pods if expected_pod_name in element]
             for pod in running_pods:
                 result_of_waiting = self.wait_until_process_inside_pod_completes(pod_name=pod, namespace=namespace, process_text_to_monitor=mount_point,timeout_value=testcase_timeout)
                 if result_of_waiting != False:
@@ -2645,6 +2666,7 @@ class OadpWorkloads(WorkloadsOperations):
        self.load_datasets_for_scenario(scenario=test_scenario)
 
        # edit zone
+       self.print_all_ds(test_scenario)
        self.create_all_datasets(test_scenario)
 
 
