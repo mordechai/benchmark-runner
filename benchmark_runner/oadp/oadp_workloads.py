@@ -37,7 +37,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        self.__oadp_scenario_name = 'backup-csi-datagen-single-ns-100pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
+        self.__oadp_scenario_name = 'restore-csi-datagen-multi-ns-sanity-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
         # self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
@@ -2205,7 +2205,7 @@ class OadpWorkloads(WorkloadsOperations):
         """
         namespaces_to_backup = self.ds_get_all_namespaces()
         if len(namespaces_to_backup) > 1:
-            namespaces_to_backup = ', '.join(namespaces_to_backup)
+            namespaces_to_backup = ','.join(namespaces_to_backup)
         logger.info(f"### INFO ### oadp_execute_scenario: Namespaces involved are: {namespaces_to_backup} ")
         if run_method == 'ansible':
             print("invoking via ansible")
@@ -2437,6 +2437,10 @@ class OadpWorkloads(WorkloadsOperations):
         # Return a list of all unique namespaces in scenario_datasets
         return [s['namespace'] for s in self.__scenario_datasets]
 
+    def ds_get_all_storageclass(self, scenario):
+        # Return a list of all unique sc in scenario_datasets
+        return [s['sc'] for s in scenario['dataset']]
+
     def ds_get_datasets_for_namespace_with_status(self, namespace, exists=None, validated=None):
         # Return datasets for the specified namespace with optional filtering by 'exists' and 'validated'
         datasets = next((s['list_of_datasets_which_belong_to_this_namespace'] for s in self.__scenario_datasets
@@ -2518,7 +2522,7 @@ class OadpWorkloads(WorkloadsOperations):
                 self.log_this(level='warning', msg=f'validate_expected_datasets: Datasets validated: {validated} expected to validate: {total_ds} validation were:', obj_to_json=self.__oadp_ds_failing_validation)
                 return False
             else:
-                logger.info(f"### INFO ### validate_expected_datasets: Validation has completed successfully for  {validated} datasets out of {total_ds} namespaces, validations were successful")
+                logger.info(f"### INFO ### validate_expected_datasets: Validation has completed successfully for {validated} datasets of {total_ds} validations were successful")
                 return True
         else:
             ds = scenario['dataset']
@@ -2689,13 +2693,11 @@ class OadpWorkloads(WorkloadsOperations):
        # Load Scenario Details
        test_scenario = self.load_test_scenario()
        self.load_datasets_for_scenario(scenario=test_scenario)
-       # edit zone
-
-
-
        self.print_all_ds(test_scenario)
-       self.create_all_datasets(test_scenario)
-       self.validate_expected_datasets(scenario=test_scenario)
+
+       # edit zone
+       # self.create_all_datasets(test_scenario)
+       # self.validate_expected_datasets(scenario=test_scenario)
 
        # edit zone
 
@@ -2717,17 +2719,20 @@ class OadpWorkloads(WorkloadsOperations):
        self.__result_dicts.append(test_scenario)
        self.generate_elastic_index(test_scenario)
 
-       namespace = test_scenario['args']['namespaces_to_backup']
-       target_namespace = test_scenario['args']['namespaces_to_backup']
 
-       # Verify desired storage is default storage class and volumesnapshotclass
-       expected_sc = test_scenario['dataset']['sc']
-       expected_size = test_scenario['dataset']['pv_size']
+       # REMOVE once validated working
+       # namespace = test_scenario['args']['namespaces_to_backup']
+       # target_namespace = test_scenario['args']['namespaces_to_backup']
+       #
+       # # Verify desired storage is default storage class and volumesnapshotclass
+       # expected_sc = test_scenario['dataset']['sc']
+       # expected_size = test_scenario['dataset']['pv_size']
 
        # Setup Default SC and Volume Snapshot Class
-       self.set_default_storage_class(expected_sc)
-       if self.this_is_downstream():
-           self.set_volume_snapshot_class(expected_sc, test_scenario)
+       for sc in self.ds_get_all_storageclass(test_scenario):
+           self.set_default_storage_class(sc)
+           if self.this_is_downstream():
+               self.set_volume_snapshot_class(sc, test_scenario)
 
        # Set Velero Debug log level
        self.set_velero_log_level(oadp_namespace=self.__test_env['velero_ns'])
@@ -2778,6 +2783,15 @@ class OadpWorkloads(WorkloadsOperations):
        self.oadp_execute_scenario(test_scenario, run_method='python')
 
        # Post Execution Validations
+       if test_scenario['args']['OADP_CR_TYPE'] == 'restore':
+           self.set_validation_retry_logic(interval_between_checks=15, max_attempts=28)
+           dataset_restored_as_expected = self.validate_expected_datasets(test_scenario)
+           self.__run_metadata['summary']['results']['dataset_post_run_validation'] = dataset_restored_as_expected
+           if not dataset_restored_as_expected:
+               logger.error(
+                   f"Restored Dataset for {test_scenario['args']['OADP_CR_NAME']} did not pass post run validations on {test_scenario['args']['namespaces_to_backup']}")
+           else:
+               logger.info('Restore passed post run validations')
        # ds validations if restore
        # cr validation if backup or restore
        # env/ cluster validations
@@ -2902,10 +2916,12 @@ class OadpWorkloads(WorkloadsOperations):
             index_prefix = 'velero-'
         else:
             index_prefix = 'oadp-'
-        if scenario['dataset']['total_namespaces'] == 1:
-            index_name = f'{index_prefix}' + scenario['testtype'] + '-' + 'single-namespace'
-        elif scenario['dataset']['total_namespaces'] > 1:
-                index_name = f'{index_prefix}' + scenario['testtype'] + '-' + 'multi-namespace'
+        total_namespaces = self.ds_get_all_namespaces()
+        index_name = f'{index_prefix}' + scenario['testtype'] + '-' + 'single-namespace'
+        # if scenario['dataset']['total_namespaces'] == 1:
+        #     index_name = f'{index_prefix}' + scenario['testtype'] + '-' + 'single-namespace'
+        # elif scenario['dataset']['total_namespaces'] > 1:
+        #         index_name = f'{index_prefix}' + scenario['testtype'] + '-' + 'multi-namespace'
         logger.info(f':: INFO :: ELK index name is: {index_name}')
         self.__run_metadata['index'] = index_name
         return index_name
