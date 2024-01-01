@@ -44,7 +44,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
         self.__oadp_validation_mode = self._environment_variables_dict.get('validation_mode', 'light') # none - skips || light - % of randomly selected pods checked || full - every pod checked
         self.__oadp_resource_collection = False
-        self.__oadp_ns_failing_validation = []
+        self.__oadp_ds_failing_validation = []
 
         self.__retry_logic = {
             'interval_between_checks': 15,
@@ -2203,9 +2203,13 @@ class OadpWorkloads(WorkloadsOperations):
         """
         method executes workload
         """
+        namespaces_to_backup = self.ds_get_all_namespaces()
+        if len(namespaces_to_backup) > 1:
+            namespaces_to_backup = ', '.join(namespaces_to_backup)
+        logger.info(f"### INFO ### oadp_execute_scenario: Namespaces involved are: {namespaces_to_backup} ")
         if run_method == 'ansible':
             print("invoking via ansible")
-            ansible_args = f"test=1 testcase={test_scenario['testcase']} plugin={test_scenario['args']['plugin']} use_cli={test_scenario['args']['use_cli']} OADP_CR_TYPE={test_scenario['args']['OADP_CR_TYPE']} OADP_CR_NAME={test_scenario['args']['OADP_CR_NAME']} backup_name={test_scenario['args']['backup_name']} namespaces_to_backup={test_scenario['args']['namespaces_to_backup']} result_dir_base_path={test_scenario['result_dir_base_path']}"
+            ansible_args = f"test=1 testcase={test_scenario['testcase']} plugin={test_scenario['args']['plugin']} use_cli={test_scenario['args']['use_cli']} OADP_CR_TYPE={test_scenario['args']['OADP_CR_TYPE']} OADP_CR_NAME={test_scenario['args']['OADP_CR_NAME']} backup_name={test_scenario['args']['backup_name']} namespaces_to_backup={namespaces_to_backup} result_dir_base_path={test_scenario['result_dir_base_path']}"
             self.__ssh.run(cmd=f'ansible-playbook {self.__oadp_base_dir}/test-oadp.yaml -e "{ansible_args}" -vv')
 
         if run_method == 'python':
@@ -2213,7 +2217,7 @@ class OadpWorkloads(WorkloadsOperations):
                 self.oadp_timer(action="start", transaction_name=f"{test_scenario['args']['OADP_CR_NAME']}")
                 self.exec_backup(plugin=test_scenario['args']['plugin'],
                                  backup_name=test_scenario['args']['backup_name'],
-                                 namespaces_to_backup=test_scenario['args']['namespaces_to_backup'])
+                                 namespaces_to_backup=namespaces_to_backup)
                 self.wait_for_condition_of_cr(cr_type=test_scenario['args']['OADP_CR_TYPE'],
                                               cr_name=test_scenario['args']['OADP_CR_NAME'],
                                               testcase_timeout=test_scenario['args']['testcase_timeout'])
@@ -2227,12 +2231,7 @@ class OadpWorkloads(WorkloadsOperations):
                                               cr_name=test_scenario['args']['OADP_CR_NAME'],
                                               testcase_timeout=test_scenario['args']['testcase_timeout'])
                 self.oadp_timer(action="stop", transaction_name=f"{test_scenario['args']['OADP_CR_NAME']}")
-                dataset_restored_as_expected = self.validate_dataset(test_scenario)
-                self.__run_metadata['summary']['results']['dataset_post_run_validation'] = dataset_restored_as_expected
-                if not dataset_restored_as_expected:
-                    logger.error(f"Restored Dataset for {test_scenario['args']['OADP_CR_NAME']} did not pass post run validations on {test_scenario['args']['namespaces_to_backup']}")
-                else:
-                    logger.info('Restore passed post run validations')
+
 
 
     @logger_time_stamp
@@ -2493,6 +2492,7 @@ class OadpWorkloads(WorkloadsOperations):
         its expected that dataset may be in
         1) legacy format as dict key/value format
         2) as a list item in the updated format
+        3) self.__oadp_ds_failing_validation will contain datasets which aren't valid
         """
         dataset_value = scenario.get('dataset')
         if isinstance(dataset_value, list):
@@ -2510,12 +2510,12 @@ class OadpWorkloads(WorkloadsOperations):
                 if validation_status:
                     validated = validated + 1
                 else:
-                    self.__oadp_ns_failing_validation.append(ds)
+                    self.__oadp_ds_failing_validation.append(ds)
                     logger.warning(f"### WARN ### DS validation for dataset was not successful for ns {ds['namespace']} the dataset details are: {ds}")
                 validations_attempted = validations_attempted + 1
             if validated != total_ds:
-                logger.warning(f"### ERROR ### validate_expected_datasets: Datasets validated: {validated} expected to validate: {total_ds} validation were: {self.__oadp_ns_failing_validation}")
-                self.log_this(level='warning', msg=f'validate_expected_datasets: Datasets validated: {validated} expected to validate: {total_ds} validation were:', obj_to_json=self.__oadp_ns_failing_validation)
+                logger.warning(f"### ERROR ### validate_expected_datasets: Datasets validated: {validated} expected to validate: {total_ds} validation were: {self.__oadp_ds_failing_validation}")
+                self.log_this(level='warning', msg=f'validate_expected_datasets: Datasets validated: {validated} expected to validate: {total_ds} validation were:', obj_to_json=self.__oadp_ds_failing_validation)
                 return False
             else:
                 logger.info(f"### INFO ### validate_expected_datasets: Validation has completed successfully for  {validated} datasets out of {total_ds} namespaces, validations were successful")
@@ -2637,6 +2637,14 @@ class OadpWorkloads(WorkloadsOperations):
                 self.__oadp_resources[f"{base_pod_name}-{count - 1}"] = {}
                 self.__oadp_runtime_resource_mapping[pod_name] = f"{base_pod_name}-{count - 1}"
 
+    def set_validation_retry_logic(self, interval_between_checks, max_attempts):
+
+        self.__retry_logic = {
+            'interval_between_checks': interval_between_checks,
+            'max_attempts': max_attempts
+        }
+        logger.info(f"### INFO ### set_validation_retry_logic: Set interval_between_checks: {self.__retry_logic['interval_between_checks']} Set max_attempts: {self.__retry_logic['max_attempts']}")
+
     @logger_time_stamp
     def remove_previous_run_report(self):
         """
@@ -2734,24 +2742,20 @@ class OadpWorkloads(WorkloadsOperations):
        # Check if source namespace aka our dataset is preseent, if dataset not prsent then create it
        if test_scenario['args']['OADP_CR_TYPE'] == 'backup':
            # setting retry logic for initial dataset presence check to be quick
-           self.__retry_logic = {
-               'interval_between_checks': 15,
-               'max_attempts': 1
-           }
-           dataset_already_present = self.validate_dataset(test_scenario)
+           self.set_validation_retry_logic(interval_between_checks=5,max_attempts=1)
+           dataset_already_present = self.validate_expected_datasets(test_scenario)
            if not dataset_already_present:
-               self.__retry_logic = {
-                   'interval_between_checks': 15,
-                   'max_attempts': 28
-               }
-               self.create_source_dataset(test_scenario)
+               self.set_validation_retry_logic(interval_between_checks=15, max_attempts=28)
+               for ds in self.__oadp_ds_failing_validation:
+                   self.create_source_dataset(test_scenario,ds)
 
        # when performing restore
        # source dataset will be removed before restore attempt unless dataset yaml contains ['args']['existingResourcePolicy'] set to 'Update'
        if test_scenario['args']['OADP_CR_TYPE'] == 'restore':
            remove_source_dataset = test_scenario['args'].get('existingResourcePolicy', False)
            if remove_source_dataset != 'Update':
-               self.delete_source_dataset(target_namespace=test_scenario['args']['namespaces_to_backup'])
+               for ns in self.ds_get_all_namespaces():
+                   self.delete_source_dataset(target_namespace=ns)
            elif remove_source_dataset == 'Update':
                print('WIP: logic for existingResourcePolicy OADP-1184 wil go here')
                # todo Add logic for existingResourcePolicy OADP-1184 which requires existingResourcePolicy: Update to be set in Restore CR
@@ -2772,6 +2776,12 @@ class OadpWorkloads(WorkloadsOperations):
 
        # # Launch OADP scenario
        self.oadp_execute_scenario(test_scenario, run_method='python')
+
+       # Post Execution Validations
+       # ds validations if restore
+       # cr validation if backup or restore
+       # env/ cluster validations
+       # summarize
 
        if self.__oadp_resource_collection:
            # Get Pod Resource after the test
