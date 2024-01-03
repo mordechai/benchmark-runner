@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 
 from benchmark_runner.common.ssh.ssh import SSH
-from benchmark_runner.oadp.oadp_exceptions import MissingResultReport, MissingElasticSearch
+from benchmark_runner.oadp.oadp_exceptions import MissingResultReport, MissingElasticSearch, OadpError
 from benchmark_runner.common.logger.logger_time_stamp import logger_time_stamp, logger
 from benchmark_runner.workloads.workloads_operations import WorkloadsOperations
 from benchmark_runner.common.prometheus.prometheus_metrics import prometheus_metrics
@@ -37,7 +37,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        self.__oadp_scenario_name = 'restore-csi-datagen-multi-ns-sanity-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
+        self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
         # self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
@@ -794,11 +794,17 @@ class OadpWorkloads(WorkloadsOperations):
             logger.error(f"### ERROR ### Datasets are either not present or were not parsed from the {scenario.name} correctly as self.__scenario_datasets is empty")
             logger.exception("Please check your datasets defined in your yaml as no datasets were loaded into self.__scenario_datasets")
 
-        for ns in self.ds_get_all_namespaces():
-            for ds in self.ds_get_datasets_for_namespace(namespace=ns):
-                self.log_this(level='INFO',msg=f"dataset for ns {ns} that has a comprises of datasets of: ", obj_to_json=self.ds_get_total_datasets_for_namespace(namespace=ns))
-                self.log_this(level='INFO',msg=f"this current dataset has  {ds['pods_per_ns']} pods in  ns {ns}  related info is", obj_to_json=ds)
-                logger.info(f"dataset for ns {ns} that has a total datasets of: {self.ds_get_total_datasets_for_namespace(namespace=ns)} {ds['pods_per_ns']} pods in  ns {ns}  related info is {ds}")
+        for ns_count, ns in enumerate(self.ds_get_all_namespaces()):
+            self.log_this(level='INFO',msg=f" Total Datasets related to namespace {ns} are: ", obj_to_json=self.ds_get_total_datasets_for_namespace(namespace=ns))
+            for ds_count, ds in enumerate(self.ds_get_datasets_for_namespace(namespace=ns)):
+                self.log_this(level='INFO',msg=f"Namespace: {ns} Dataset #{ds_count+1}  has total  {ds['pods_per_ns']} pods in  ns {ns} detailed info: ", obj_to_json=ds)
+                # logger.info(f"dataset for ns {ns} that has a total datasets of: {self.ds_get_total_datasets_for_namespace(namespace=ns)} {ds['pods_per_ns']} pods in  ns {ns}  related info is {ds}")
+        #
+        # for ns_count, ns in enumerate(self.ds_get_all_namespaces()):
+        #     for ds_count, ds in enumerate(self.ds_get_datasets_for_namespace(namespace=ns)):
+        #         self.log_this(level='INFO',msg=f" Datasets related to namespace {ns} are: ", obj_to_json=self.ds_get_total_datasets_for_namespace(namespace=ns))
+        #         self.log_this(level='INFO',msg=f"this current dataset has  {ds['pods_per_ns']} pods in  ns {ns} detailed info: ", obj_to_json=ds)
+        #         logger.info(f"dataset for ns {ns} that has a total datasets of: {self.ds_get_total_datasets_for_namespace(namespace=ns)} {ds['pods_per_ns']} pods in  ns {ns}  related info is {ds}")
 
     @logger_time_stamp
     def create_all_datasets(self, scenario):
@@ -1802,18 +1808,27 @@ class OadpWorkloads(WorkloadsOperations):
         This method return data of test scenarios for __oadp_scenario_name
         to supply details of oadp test scenario to run
         """
-        if os.path.exists(os.path.join(self.__oadp_scenario_data)) and not os.stat(
-                self.__oadp_scenario_data).st_size == 0:
-            test_data = yaml.safe_load(Path(self.__oadp_scenario_data).read_text())
-        for case in test_data['scenarios']:
-            if case['name'] == self.__oadp_scenario_name:
-                logger.info(
-                    f" load_test_scenario has loaded details of scenario: {self.__oadp_scenario_name} from the yaml")
-                return case
-        else:
-            logger.error('Yaml for test scenarios is not found or empty!!')
-            logger.error('Test Scenario index is not found')
-            logger.exception(f'Test Scenario {self.__oadp_scenario_name} index is not found')
+        try:
+
+            if os.path.exists(os.path.join(self.__oadp_scenario_data)) and not os.stat(
+                    self.__oadp_scenario_data).st_size == 0:
+                test_data = yaml.safe_load(Path(self.__oadp_scenario_data).read_text())
+            for case in test_data['scenarios']:
+                if case['name'] == self.__oadp_scenario_name:
+                    logger.info(f"### INFO ### load_test_scenario has loaded details of scenario: {self.__oadp_scenario_name} from the yaml")
+                    if case is None:
+                        logger.exception(f'Test Scenario is undefined or not found ')
+                        raise Exception('Test Scenario is undefined or not found ')
+                    else:
+                        return case
+            else:
+                logger.error('Yaml for test scenarios is not found or empty!!')
+                logger.error('Test Scenario index is not found')
+                logger.exception(f'Test Scenario {self.__oadp_scenario_name} index is not found')
+        except OadpError as err:
+            raise OadpError(err)
+        except Exception as err:
+            raise err
 
     @logger_time_stamp
     def parse_oadp_cr(self, ns, cr_type, cr_name):
@@ -1834,6 +1849,10 @@ class OadpWorkloads(WorkloadsOperations):
                 cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_cr_status}")
             if cr_status != '':
                 cr_info['cr_status'] = cr_status
+                if cr_status != 'Completed':
+                    logger.error(f'### parse_oadp_cr: After {cr_type} finished the CR status is {cr_status}')
+                else:
+                    logger.info(f'### parse_oadp_cr: After {cr_type} finished the CR status is {cr_status}')
 
             jsonpath_cr_kind = "'{.kind}'"
             cr_kind = self.__ssh.run(
@@ -2173,7 +2192,7 @@ class OadpWorkloads(WorkloadsOperations):
                 warnings_and_errors = self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero {cr_type} logs {cr_name} --insecure-skip-tls-verify | grep 'warn\|error\|critical\|exception'")
                 self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero {cr_type} logs {cr_name} --insecure-skip-tls-verify | grep 'warn\|error\|critical\|exception' >> {oadp_velero_log}")
             logger.info(f":: INFO ::  validate_oadp_cr :: reports the following {error_count} errors and warnings for {cr_name} ")
-            logger.warn(f":: WARN ::  {cr_name} log showed: ")
+            logger.warn(f":: WARN ::  {cr_name} log showed: {warnings_and_errors}")
 
 
 
@@ -2391,7 +2410,15 @@ class OadpWorkloads(WorkloadsOperations):
         elif isinstance(scenario['dataset'], dict):
             # Scenario where dataset is a single dictionary
             namespace = scenario['args'].get('namespaces_to_backup', "")
-            all_datasets.append(self._process_dataset(scenario['dataset'], namespace))
+            summary = {
+                'namespace': namespace,
+                'total_datasets_for_this_namespace': 1,
+                'total_pods_per_all_datasets_with_same_namespace': scenario['dataset']['pods_per_ns'],
+                'list_of_datasets_which_belong_to_this_namespace': [self._process_dataset(dataset=scenario['dataset'], namespace=namespace)],
+                'all_ds_exists': False,
+                'all_ds_validated': False
+            }
+            all_datasets.append(summary)
 
         # Check if all datasets in the scenario have 'exists' and 'validated' as True
         exists = all(all(ds['exists'] for ds in dataset['list_of_datasets_which_belong_to_this_namespace']) for dataset in all_datasets)
@@ -2401,27 +2428,8 @@ class OadpWorkloads(WorkloadsOperations):
         existing_namespace_index = next((i for i, s in enumerate(self.__scenario_datasets)
                                          if s['namespace'] == namespace), None)
 
-        # if existing_namespace_index is not None:
-        #     # Update existing entry in scenario_datasets
-        #     existing_entry = self.__scenario_datasets[existing_namespace_index]
-        #     existing_entry['total_datasets_for_this_namespace'] += len(all_datasets)
-        #     existing_entry['total_pods_per_all_datasets_with_same_namespace'] += sum(
-        #         ds['pods_per_ns'] for ds in all_datasets)
-        #     existing_entry['list_of_datasets_which_belong_to_this_namespace'].extend(all_datasets)
-        #     existing_entry['all_ds_exists'] = existing_entry['all_ds_exists'] and exists
-        #     existing_entry['all_ds_validated'] = existing_entry['all_ds_validated'] and validated
-        # else:
-        #     # Add a new entry to scenario_datasets
-        #     summary = {
-        #         'namespace': namespace,
-        #         'total_datasets_for_this_namespace': len(all_datasets),
-        #         'total_pods_per_all_datasets_with_same_namespace': sum(ds['pods_per_ns'] for ds in all_datasets),
-        #         'list_of_datasets_which_belong_to_this_namespace': all_datasets,
-        #         'all_ds_exists': exists,
-        #         'all_ds_validated': validated
-        #     }
-        # self.__scenario_datasets.append(summary)
         self.__scenario_datasets = all_datasets
+        self.print_all_ds(scenario)
 
     def ds_get_datasets_for_namespace(self, namespace):
         # Return list_of_datasets_which_belong_to_this_namespace for the specified namespace
@@ -2693,13 +2701,6 @@ class OadpWorkloads(WorkloadsOperations):
        # Load Scenario Details
        test_scenario = self.load_test_scenario()
        self.load_datasets_for_scenario(scenario=test_scenario)
-       self.print_all_ds(test_scenario)
-
-       # edit zone
-       # self.create_all_datasets(test_scenario)
-       # self.validate_expected_datasets(scenario=test_scenario)
-
-       # edit zone
 
        # Verify no left over test results
        self.remove_previous_run_report()
@@ -2718,15 +2719,6 @@ class OadpWorkloads(WorkloadsOperations):
        self.__run_metadata['summary']['runtime'].update(test_scenario)
        self.__result_dicts.append(test_scenario)
        self.generate_elastic_index(test_scenario)
-
-
-       # REMOVE once validated working
-       # namespace = test_scenario['args']['namespaces_to_backup']
-       # target_namespace = test_scenario['args']['namespaces_to_backup']
-       #
-       # # Verify desired storage is default storage class and volumesnapshotclass
-       # expected_sc = test_scenario['dataset']['sc']
-       # expected_size = test_scenario['dataset']['pv_size']
 
        # Setup Default SC and Volume Snapshot Class
        for sc in self.ds_get_all_storageclass(test_scenario):
