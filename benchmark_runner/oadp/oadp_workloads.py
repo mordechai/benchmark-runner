@@ -37,8 +37,8 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
-        # self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
+        # self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
+        self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
@@ -1820,6 +1820,12 @@ class OadpWorkloads(WorkloadsOperations):
                         logger.exception(f'Test Scenario is undefined or not found ')
                         raise Exception('Test Scenario is undefined or not found ')
                     else:
+                        if self.validate_scenario(case):
+                            logger.info(f"#### INFO #### Scenario '{case['name']}' is valid.")
+                        else:
+                            logger.error(f"### INFO ### Scenario '{case['name']}' is invalid.")
+                            logger.exception('Scenario described in yaml is not valid or missing expected details')
+
                         return case
             else:
                 logger.error('Yaml for test scenarios is not found or empty!!')
@@ -2648,6 +2654,50 @@ class OadpWorkloads(WorkloadsOperations):
                         print ("here")
                 self.__oadp_resources[f"{base_pod_name}-{count - 1}"] = {}
                 self.__oadp_runtime_resource_mapping[pod_name] = f"{base_pod_name}-{count - 1}"
+
+    def validate_scenario(self, scenario):
+        required_keys = ['name', 'testcase', 'dataset', 'result_dir_base_path', 'testtype', 'args']
+        dataset_keys = ['role', 'pods_per_ns', 'sc']
+        args_keys = ['plugin', 'use_cli', 'OADP_CR_TYPE', 'OADP_CR_NAME', 'backup_name', 'testcase_timeout']
+
+        # Check if all required keys are present in the scenario
+        for key in required_keys:
+            if key not in scenario:
+                print(f"Error: Missing key '{key}' in the scenario.")
+                return False
+
+        # Check dataset type and its keys
+        if 'dataset' in scenario:
+            dataset = scenario['dataset']
+            if isinstance(dataset, list):
+                # Check each member of the list
+                dataset_keys.append('namespace')
+                for data in dataset:
+                    if not all(key in data for key in dataset_keys):
+                        print("Error: Missing dataset key(s) in the scenario.")
+                        return False
+                # Check if args['namespace_to_backup'] exists when dataset is a list
+                if 'args' in scenario and isinstance(dataset, dict) and 'namespace_to_backup' not in scenario['args']:
+                    print("Error: 'args' key must contain 'namespace_to_backup' when dataset is a list.")
+                    return False
+            elif isinstance(dataset, dict):
+                # Check keys in the dictionary
+                if not all(key in dataset for key in dataset_keys):
+                    print("Error: Missing dataset key(s) in the scenario.")
+                    return False
+            else:
+                print("Error: 'dataset' must be either a list or a dictionary.")
+                return False
+
+        # Check keys in 'args' dictionary
+        if 'args' in scenario:
+            args = scenario['args']
+            if not all(key in args for key in args_keys):
+                print("Error: Missing 'args' key(s) in the scenario.")
+                return False
+
+        # All checks passed, scenario is valid
+        return True
 
     def set_validation_retry_logic(self, interval_between_checks, max_attempts):
 
