@@ -1555,6 +1555,7 @@ class OadpWorkloads(WorkloadsOperations):
         """
         Sets volume snapshot class per storage
         """
+        cmd_set_volume_snapshot_class = ''
         if sc == 'ocs-storagecluster-ceph-rbd':
             cmd_set_volume_snapshot_class = self.__ssh.run(cmd=f"oc apply -f {self.__oadp_base_dir}/vsc-cephRBD.yaml")
         if sc == 'ocs-storagecluster-cephfs' or sc == 'ocs-storagecluster-cephfs-shallow':
@@ -2230,6 +2231,8 @@ class OadpWorkloads(WorkloadsOperations):
         namespaces_to_backup = self.ds_get_all_namespaces()
         if len(namespaces_to_backup) > 1:
             namespaces_to_backup = ','.join(namespaces_to_backup)
+        if len(namespaces_to_backup) == 1:
+            namespaces_to_backup = str(namespaces_to_backup[0])
         logger.info(f"### INFO ### oadp_execute_scenario: Namespaces involved are: {namespaces_to_backup} ")
         if run_method == 'ansible':
             print("invoking via ansible")
@@ -2454,7 +2457,9 @@ class OadpWorkloads(WorkloadsOperations):
         # Return a list of all unique sc in scenario_datasets
 
         if isinstance(scenario['dataset'], dict):
-            return list(scenario['dataset']['sc'])
+            sc_list = []
+            sc_list.append(scenario['dataset']['sc'])
+            return sc_list
         if isinstance(scenario['dataset'], list):
             unique_sc_list = set()
             for s in self.__scenario_datasets:
