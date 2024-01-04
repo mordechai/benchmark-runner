@@ -1300,8 +1300,8 @@ class OadpWorkloads(WorkloadsOperations):
        if scenario['args']['plugin'] == 'restic':
            uploader_type = 'restic'
 
-       if 'nodeAgent' in result and 'uploaderType' in result['nodeAgent'] and result['nodeAgent'][
-           'uploaderType'] != uploader_type:
+       logger.info(f"### INFO ### current uploader type: {result['nodeAgent']['uploaderType'] } desired: {uploader_type} actual scenaroi plugintype: {scenario['args']['plugin']}")
+       if 'nodeAgent' in result and 'uploaderType' in result['nodeAgent'] and result['nodeAgent']['uploaderType'] != uploader_type:
            logger.warning(f"## WARNING ### is_dpa_change_needed: Condition not met: 'uploaderType' of 'nodeAgent' must be {uploader_type}.")
            return True
 
