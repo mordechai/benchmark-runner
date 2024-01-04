@@ -1273,6 +1273,46 @@ class OadpWorkloads(WorkloadsOperations):
         except Exception as err:
             logger.error(f':: ERROR :: Issue in waiting for DPA changes to process in your oadp namespace {err}')
 
+    def is_dpa_change_needed(self, scenario, oadp_namespace):
+       """
+       method checks current dpa to see if dpa change is needed
+       """
+       dpa_data = self.get_oc_resource_to_json(resource_type='dpa', resource_name=self.__oadp_dpa,
+                                               namespace=oadp_namespace)
+       if bool(dpa_data) == False:
+           logger.error(
+               ':: ERROR :: FAIL DPA is not present command to get dpa as json resulted in empty dict will attempt to recreate')
+
+       result = dpa_data['spec']['configuration']
+       uploader_type = ''
+
+       if 'nodeAgent' not in result or not result['nodeAgent']['enable']:
+           logger.warning("## WARNING ### is_dpa_change_needed: Condition not met: 'nodeAgent' must be present and 'enable' must be True.")
+           return True
+
+       if 'velero' not in result or 'defaultPlugins' not in result['velero'] or 'csi' not in result['velero'][
+           'defaultPlugins']:
+           logger.warning("## WARNING ### is_dpa_change_needed: Condition not met: 'csi' must be present in 'defaultPlugins' of 'velero'.")
+           return True
+
+       if scenario['args']['plugin'] == 'csi' or scenario['args']['plugin'] == 'vsm':
+           uploader_type = 'kopia'
+       if scenario['args']['plugin'] == 'restic':
+           uploader_type = 'restic'
+
+       if 'nodeAgent' in result and 'uploaderType' in result['nodeAgent'] and result['nodeAgent'][
+           'uploaderType'] != uploader_type:
+           logger.warning(f"## WARNING ### is_dpa_change_needed: Condition not met: 'uploaderType' of 'nodeAgent' must be {uploader_type}.")
+           return True
+
+       if 'velero' in result and 'logLevel' in result['velero'] and result['velero']['logLevel'] != 'debug':
+           logger.warning("## WARNING ### is_dpa_change_needed: Condition not met: 'logLevel' of 'velero' must be 'debug'.")
+           return True
+
+       logger.info('### INFO ### DPA is valid and as expected - skipping DPA changes')
+
+       return False
+
 
 
     @logger_time_stamp
@@ -1676,10 +1716,14 @@ class OadpWorkloads(WorkloadsOperations):
             jsonpath_oadp_iib = "'{.spec.image}'"
             oadp_iib_cmd =  self.__ssh.run(cmd=f"oc get catsrc {oadp_catalog_source} -n openshift-marketplace -o jsonpath={jsonpath_oadp_iib} --ignore-not-found | grep -Eo 'iib:[0-9]+'")
             if oadp_iib_cmd != '':
+                logger.info (f"Attempting Datagrepper request as:  curl -s -k https://datagrepper.engineering.redhat.com/raw\?topic\=/topic/VirtualTopic.eng.ci.redhat-container-image.index.built\&contains\={oadp_iib_cmd}\&rows_per_page\=1\&delta\=15552000 | jq -r '.raw_messages[0].msg.artifact.nvr'")
                 oadp_internal_build = self.__ssh.run(cmd=f"curl -s -k https://datagrepper.engineering.redhat.com/raw\?topic\=/topic/VirtualTopic.eng.ci.redhat-container-image.index.built\&contains\={oadp_iib_cmd}\&rows_per_page\=1\&delta\=15552000 | jq -r '.raw_messages[0].msg.artifact.nvr'")
                 if oadp_internal_build != '':
-                    oadp_details['oadp']['internal_build'] = oadp_internal_build.split('oadp-operator-bundle-container-')[1]
-                    oadp_details['oadp']['iib'] = oadp_iib_cmd.split('iib:')[1]
+                    logger.info(f"DataGrepper Curl command returned {oadp_internal_build}")
+                    if 'oadp-operator-bundle-container-' in oadp_internal_build:
+                        oadp_details['oadp']['internal_build'] = oadp_internal_build.split('oadp-operator-bundle-container-')[1]
+                    if 'iib:' in oadp_iib_cmd:
+                        oadp_details['oadp']['iib'] = oadp_iib_cmd.split('iib:')[1]
         else:
             # internal build is not set must parse from operator name
             import re
@@ -2795,10 +2839,11 @@ class OadpWorkloads(WorkloadsOperations):
        self.set_velero_log_level(oadp_namespace=self.__test_env['velero_ns'])
 
        if self.this_is_downstream():
-           # Modify DPA uploaderType to match plugin from scenario
-           self.config_dpa_for_plugin(scenario=test_scenario, oadp_namespace=self.__test_env['velero_ns'])
-           self.wait_for_dpa_changes(oadp_namespace=self.__test_env['velero_ns'])
-           self.verify_bsl_status()
+           if self.is_dpa_change_needed(scenario=test_scenario, oadp_namespace=self.__test_env['velero_ns']):
+               # Modify DPA uploaderType to match plugin from scenario
+               self.config_dpa_for_plugin(scenario=test_scenario, oadp_namespace=self.__test_env['velero_ns'])
+               self.wait_for_dpa_changes(oadp_namespace=self.__test_env['velero_ns'])
+               self.verify_bsl_status()
 
        # when performing backup
        # Check if source namespace aka our dataset is preseent, if dataset not prsent then create it
