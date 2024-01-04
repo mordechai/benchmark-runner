@@ -37,7 +37,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
+        # self.__oadp_scenario_name = 'backup-csi-datagen-multi-ns-sanity-rbd' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
         self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
@@ -1557,15 +1557,14 @@ class OadpWorkloads(WorkloadsOperations):
         """
         if sc == 'ocs-storagecluster-ceph-rbd':
             cmd_set_volume_snapshot_class = self.__ssh.run(cmd=f"oc apply -f {self.__oadp_base_dir}/vsc-cephRBD.yaml")
-            logger.info(f":: INFO :: RBD Attempting to set for {sc} vsc the output was {cmd_set_volume_snapshot_class} ")
         if sc == 'ocs-storagecluster-cephfs' or sc == 'ocs-storagecluster-cephfs-shallow':
             cmd_set_volume_snapshot_class = self.__ssh.run(cmd=f"oc apply -f {self.__oadp_base_dir}/vsc-cephFS.yaml")
-            logger.info(f":: INFO :: CEPHFS Attempting to set for {sc} vsc the output was {cmd_set_volume_snapshot_class} ")
-        logger.info(f":: INFO :: Attempting to set for {sc} vsc the output was {cmd_set_volume_snapshot_class} ")
-        expected_result_output = ['created', 'unchanged', 'configured']
+        expected_result_output = ['created', 'unchanged', 'configured', 'already exists for driver']
         if any(ext in cmd_set_volume_snapshot_class for ext in expected_result_output) == False:
-            print(f"Unable to set volume-snapshot-class {sc} ")
+            logger.error(f":: INFO :: set_volume_snapshot_class: not successful to setup for  {sc}  output from comand was {cmd_set_volume_snapshot_class} ")
             logger.exception(f"Unable to set volume-snapshot-class {sc}")
+        else:
+            logger.info(f":: INFO :: set_volume_snapshot_class: setup for  {sc} ")
 
 
     @logger_time_stamp
@@ -2453,7 +2452,18 @@ class OadpWorkloads(WorkloadsOperations):
 
     def ds_get_all_storageclass(self, scenario):
         # Return a list of all unique sc in scenario_datasets
-        return [s['sc'] for s in scenario['dataset']]
+
+        if isinstance(scenario['dataset'], dict):
+            return list(scenario['dataset']['sc'])
+        if isinstance(scenario['dataset'], list):
+            unique_sc_list = set()
+            for s in self.__scenario_datasets:
+                datasets = s.get('list_of_datasets_which_belong_to_this_namespace', [])
+                for dataset in datasets:
+                    sc = dataset.get('sc')
+                    if sc:
+                        unique_sc_list.add(sc)
+            return list(unique_sc_list)
 
     def ds_get_datasets_for_namespace_with_status(self, namespace, exists=None, validated=None):
         # Return datasets for the specified namespace with optional filtering by 'exists' and 'validated'
@@ -2752,7 +2762,7 @@ class OadpWorkloads(WorkloadsOperations):
        test_scenario = self.load_test_scenario()
        self.load_datasets_for_scenario(scenario=test_scenario)
 
-       # Verify no left over test results
+       # # Verify no left over test results
        self.remove_previous_run_report()
 
        # Detect if were using upstream/downstream by velero ns contents
@@ -2771,9 +2781,9 @@ class OadpWorkloads(WorkloadsOperations):
        self.generate_elastic_index(test_scenario)
 
        # Setup Default SC and Volume Snapshot Class
-       for sc in self.ds_get_all_storageclass(test_scenario):
-           self.set_default_storage_class(sc)
-           if self.this_is_downstream():
+       if self.this_is_downstream():
+           for sc in self.ds_get_all_storageclass(test_scenario):
+               self.set_default_storage_class(sc)
                self.set_volume_snapshot_class(sc, test_scenario)
 
        # Set Velero Debug log level
