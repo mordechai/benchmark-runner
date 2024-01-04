@@ -37,7 +37,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'backup-csi-datagen-multi-ns-sanity-rbd' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
+        # self.__oadp_scenario_name = 'backup-kopia-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-multi-ns-sanity-rbd' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
         self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
@@ -2606,7 +2606,9 @@ class OadpWorkloads(WorkloadsOperations):
             if validation_status:
                 logger.info(f"### INFO ### validate_expected_datasets status: {validation_status} for {ds['namespace']} validations was successful")
             else:
-                logger.error(f"### ERROR ### validate_expected_datasets status: {validation_status} for {ds['namespace']} validation has FAILED")
+                self.__oadp_ds_failing_validation.append(ds)
+                logger.warning(f"### WARN ### validate_expected_datasets status: {validation_status} for {ds['namespace']} validation has FAILED")
+            return validation_status
 
     @logger_time_stamp
     def validate_dataset(self, scenario, ds):
@@ -2853,6 +2855,7 @@ class OadpWorkloads(WorkloadsOperations):
            dataset_already_present = self.validate_expected_datasets(test_scenario)
            if not dataset_already_present:
                self.set_validation_retry_logic(interval_between_checks=15, max_attempts=28)
+               logger.info(f" dataset_already_present: {dataset_already_present} and  self.__oadp_ds_failing_validation {self.__oadp_ds_failing_validation} ")
                for ds in self.__oadp_ds_failing_validation:
                    self.create_source_dataset(test_scenario,ds)
 
