@@ -53,6 +53,7 @@ class EnvironmentVariables:
         self._environment_variables_dict['oadp_cleanup_cr'] = EnvironmentVariables.get_boolean_from_environment('OADP_CLEANUP_CR', False)
         self._environment_variables_dict['oadp_cleanup_dataset'] = EnvironmentVariables.get_boolean_from_environment('OADP_CLEANUP_DATASET', False)
         self._environment_variables_dict['oadp_bucket'] = EnvironmentVariables.get_boolean_from_environment('OADP_BUCKET', False)
+        self._environment_variables_dict['oadp_velero_ns'] = EnvironmentVariables.get_env('OADP_VELERO_NS', 'openshift-adp')
 
         # PIN=node selector
         self._environment_variables_dict['pin_node_benchmark_operator'] = EnvironmentVariables.get_env('PIN_NODE_BENCHMARK_OPERATOR', 'worker000-r640')

@@ -45,7 +45,6 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_validation_mode = self._environment_variables_dict.get('validation_mode', 'light') # none - skips || light - % of randomly selected pods checked || full - every pod checked
         self.__oadp_resource_collection = False
         self.__oadp_ds_failing_validation = []
-
         self.__retry_logic = {
             'interval_between_checks': 15,
              'max_attempts': 20
@@ -60,7 +59,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_dpa = 'example-velero'
         self.__test_env = {
             'source': 'upstream',
-            'velero_ns': 'openshift-adp',
+            'velero_ns': self._environment_variables_dict.get('oadp_velero_ns', 'openshift-adp'),
             'velero_cli_path': '/tmp/velero-1-12'
         }
         self.__result_dicts = []
@@ -2788,6 +2787,7 @@ class OadpWorkloads(WorkloadsOperations):
         method to detect whether its downstream or upstream velero
         by checking for oadp named pod
         """
+        logger.info(f"### INFO ### set_velero_stream_source: Namespace to inspect for upstream/downstream:  {self.__test_env['velero_ns']}")
         check_for_oadp_pod_presence = self.__ssh.run(cmd=f"oc get pods -n {self.__test_env['velero_ns']} --field-selector status.phase=Running --no-headers -o custom-columns=':metadata.name' | grep -c 'openshift-adp-controller-manager'")
         if check_for_oadp_pod_presence != '1':
             self.__test_env['source'] = 'upstream'
