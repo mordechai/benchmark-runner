@@ -775,7 +775,7 @@ class OadpWorkloads(WorkloadsOperations):
                     f":: INFO :: busybox_dataset_creation: loop has executed 50 instances sleeping for 6 min executing {self.__oadp_path}/{role} {num_of_assets_desired} {pv_size} {storage} '' {start} {end}  >> {dataset_creation_log}")
                 pods_progressing = True
                 while pods_progressing:
-                    pods_progressing = self.verify_pods_are_progressing(scenario=scenario,interval_between_checks=self.__retry_logic['interval_between_checks'], max_attempts=self.__retry_logic['max_attempts'])
+                    pods_progressing = self.verify_pods_are_progressing(scenario=scenario,interval_between_checks=self.__retry_logic['interval_between_checks'], max_attempts=self.__retry_logic['max_attempts'],ds=ds)
                     logger.info(f":: INFO :: busybox_dataset_creation: pods are no longer progressing next batch can start if appplicable")
         logger.info(f":: INFO :: busybox_dataset_creation: loop has executed 10 times now sleeping for 1 min executing {self.__oadp_path}/{role} {num_of_assets_desired} {pv_size} {storage} '' {start} {end}  >> {dataset_creation_log}")
         self.oadp_timer(action="stop", transaction_name='dataset_creation')
