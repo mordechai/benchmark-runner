@@ -61,11 +61,11 @@ class VMNotCreateTimeout(OCError):
         super(VMNotCreateTimeout, self).__init__(self.message)
 
 
-class VMTerminateTimeout(OCError):
-    """This exception return pod terminate timeout error"""
-    def __init__(self, pod_name):
-        self.message = f'VM name: {pod_name} is not terminated'
-        super(VMTerminateTimeout, self).__init__(self.message)
+class VMDeleteTimeout(OCError):
+    """This exception return vm delete timeout error"""
+    def __init__(self, vm_name):
+        self.message = f'VM name: {vm_name} is not deleted'
+        super(VMDeleteTimeout, self).__init__(self.message)
 
 
 class VMNameNotExist(OCError):
@@ -96,6 +96,13 @@ class VMNotReadyTimeout(OCError):
         super(VMNotReadyTimeout, self).__init__(self.message)
 
 
+class VMStateTimeout(OCError):
+    """This exception indicates timeout for VM state """
+    def __init__(self, vm_name, state):
+        self.message = f'VM: {vm_name} does not reach to start: {state}'
+        super(VMStateTimeout, self).__init__(self.message)
+
+
 class VMNotCompletedTimeout(OCError):
     """This exception return vm completed error"""
     def __init__(self, workload):
@@ -115,3 +122,10 @@ class PodFailed(OCError):
     def __init__(self, pod):
         self.message = f'pod {pod} failed'
         super(PodFailed, self).__init__(self.message)
+
+
+class DVStatusTimeout(OCError):
+    """This exception return dv status timeout error"""
+    def __init__(self, status):
+        self.message = f'DV status {status} timeout'
+        super(DVStatusTimeout, self).__init__(self.message)

@@ -1,9 +1,10 @@
-
 # Tests that are not required benchmark-operator pod
 
 import time
 import tempfile
 import tarfile
+import mock
+
 from benchmark_runner.common.oc.oc import OC
 from tests.integration.benchmark_runner.test_environment_variables import *
 from benchmark_runner.common.prometheus.prometheus_snapshot import PrometheusSnapshot
@@ -11,22 +12,53 @@ from benchmark_runner.common.prometheus.prometheus_snapshot import PrometheusSna
 
 def test_oc_get_ocp_server_version():
     """
-    This method get ocp server version
+    This method gets ocp server version
     :return:
     """
     oc = OC(kubeadmin_password=test_environment_variable['kubeadmin_password'])
     oc.login()
-    print(oc.get_ocp_server_version())
+    assert oc.get_ocp_server_version()
 
 
-def test_oc_get_kata_version():
+def test_get_ocp_major_version():
     """
-    This method gets the sandboxed containers (kata) version
+    This method gets ocp major version
     :return:
     """
     oc = OC(kubeadmin_password=test_environment_variable['kubeadmin_password'])
     oc.login()
-    assert oc.get_kata_version()
+    assert oc.get_ocp_major_version()
+
+
+def test_get_ocp_minor_version():
+    """
+    This method gets ocp minor version
+    :return:
+    """
+    oc = OC(kubeadmin_password=test_environment_variable['kubeadmin_password'])
+    oc.login()
+    assert oc.get_ocp_minor_version()
+
+
+def test_oc_get_kata_operator_version():
+    """
+    This method gets the sandboxed containers (kata) operator version
+    :return:
+    """
+    oc = OC(kubeadmin_password=test_environment_variable['kubeadmin_password'])
+    oc.login()
+    assert oc.get_kata_operator_version()
+
+
+def test_oc_get_kata_rpm_version():
+    """
+    This method gets the sandboxed containers (kata) rpm version
+    :return:
+    """
+    oc = OC(kubeadmin_password=test_environment_variable['kubeadmin_password'])
+    oc.login()
+    assert oc.get_kata_rpm_version(node=test_environment_variable['pin_node1'])
+    assert len(oc.get_kata_rpm_version(node=test_environment_variable['pin_node1']).split('.')) == 3
 
 
 def test_oc_get_cnv_version():
@@ -46,7 +78,47 @@ def test_oc_get_odf_version():
     """
     oc = OC(kubeadmin_password=test_environment_variable['kubeadmin_password'])
     oc.login()
-    oc.get_odf_version()
+    assert oc.get_odf_version()
+
+
+def test_oc_get_pv_disk_ids():
+    """
+    This method test get pv disk ids
+    :return:
+    """
+    oc = OC(kubeadmin_password=test_environment_variable['kubeadmin_password'])
+    oc.login()
+    assert len(oc.get_pv_disk_ids()) > 1
+    assert oc.get_pv_disk_ids()
+
+
+def mock_get_worker_disk_ids(*args, **kwargs):
+    """
+    This method mock method class get_worker_disk_ids
+    """
+    return ['scsi-3600062b33333333333333333333333333']
+
+
+def test_oc_get_free_disk_id():
+    """
+    This method gets free_disk_id string
+    :return:
+    """
+    oc = OC(kubeadmin_password=test_environment_variable['kubeadmin_password'])
+    oc.login()
+    with mock.patch.object(OC, 'get_worker_disk_ids', new=mock_get_worker_disk_ids):
+        assert oc.get_free_disk_id()
+
+
+def test_oc_get_odf_disk_count():
+    """
+    This method gets odf disk count
+    :return:
+    """
+    oc = OC(kubeadmin_password=test_environment_variable['kubeadmin_password'])
+    oc.login()
+    odf_disk_count = oc.get_odf_disk_count()
+    assert (odf_disk_count is None or odf_disk_count > 0)
 
 
 def test_oc_get_master_nodes():
@@ -126,16 +198,6 @@ def test_is_odf_installed():
     assert oc.is_odf_installed()
 
 
-def test_is_kata_installed():
-    """
-    This method check if kata operator is installed
-    :return:
-    """
-    oc = OC(kubeadmin_password=test_environment_variable['kubeadmin_password'])
-    oc.login()
-    assert oc.is_kata_installed()
-
-
 def test_oc_exec():
     """
     Test that oc exec works
@@ -144,7 +206,8 @@ def test_oc_exec():
     test_message = "I am here"
     oc = OC(kubeadmin_password=test_environment_variable['kubeadmin_password'])
     oc.login()
-    answer = oc.exec(pod_name="prometheus-k8s-0", namespace="openshift-monitoring", container='prometheus', command=f'echo "{test_message}"')
+    answer = oc.exec(pod_name="prometheus-k8s-0", namespace="openshift-monitoring", container='prometheus',
+                     command=f'echo "{test_message}"')
     assert answer == test_message
 
 

@@ -10,13 +10,13 @@ from benchmark_runner.benchmark_operator.benchmark_operator_workloads_operations
 
 class HammerdbPod(BenchmarkOperatorWorkloadsOperations):
     """
-    This class for uperf workload
+    This class runs hammerdb workload
     """
     ES_FETCH_TIME = 30
 
     def __init__(self):
         """
-        All inherit from WorkloadsOperations
+        All inherit from BenchmarkOperatorWorkloadsOperations
         """
         super().__init__()
         self.__name = ''
@@ -30,10 +30,11 @@ class HammerdbPod(BenchmarkOperatorWorkloadsOperations):
     @logger_time_stamp
     def run(self):
         """
-        This method run hammerdb workload
+        This method runs hammerdb workload
         :return:
         """
         try:
+            self._prometheus_metrics_operation.init_prometheus()
             self.__name = f"{self._workload.split('_')[0]}_{self._workload.split('_')[1]}"
             self.__database = self._workload.split('_')[2]
             if 'kata' in self._workload:
@@ -64,6 +65,10 @@ class HammerdbPod(BenchmarkOperatorWorkloadsOperations):
             self._oc.wait_for_ready(label='app=hammerdb_workload', workload=self.__workload_name)
             self.__status = self._oc.wait_for_pod_completed(label='app=hammerdb_workload', workload=self.__workload_name)
             self.__status = 'complete' if self.__status else 'failed'
+            # prometheus queries
+            self._prometheus_metrics_operation.finalize_prometheus()
+            metric_results = self._prometheus_metrics_operation.run_prometheus_queries()
+            prometheus_result = self._prometheus_metrics_operation.parse_prometheus_metrics(data=metric_results)
             # system metrics
             if environment_variables.environment_variables_dict['system_metrics']:
                 self.system_metrics_collector(workload=self.__workload_name, es_fetch_min_time=self.__es_fetch_min_time)
@@ -74,7 +79,7 @@ class HammerdbPod(BenchmarkOperatorWorkloadsOperations):
                 ids = self._verify_elasticsearch_data_uploaded(index=self.__es_index, uuid=self._oc.get_long_uuid(workload=self.__workload_name), es_fetch_min_time=self.__es_fetch_min_time)
                 # update metadata
                 for id in ids:
-                    self._update_elasticsearch_index(index=self.__es_index, id=id, kind=self.__kind, database=self.__database, status=self.__status, run_artifacts_url=run_artifacts_url)
+                    self._update_elasticsearch_index(index=self.__es_index, id=id, kind=self.__kind, database=self.__database, status=self.__status, run_artifacts_url=run_artifacts_url, prometheus_result=prometheus_result)
             # delete hammerdb
             self._oc.delete_pod_sync(
                 yaml=os.path.join(f'{self._run_artifacts_path}',  f'{self.__name}_{self.__database}.yaml'),

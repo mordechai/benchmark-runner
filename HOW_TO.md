@@ -45,23 +45,19 @@ compares these files against expected files found in
 `tests/unittest/benchmark_runner/common/workloads_flavors/golden_files` and fails if
 any golden files have been added, modified, or removed.
 
-_*If you add or modify any YAML files, you must run the following commands:*_
+*If you remove any YAML files, you must identify the changed files and
+`git rm` them before committing the result.*
+
+_*If you add or modify any YAML files, you must run the following
+commands from top level to regenerate and test the golden files:*_
+
+
+The `make` command will run a check automatically to check to verify
+the golden files; this check is also run as part of the unit tests.
+The output will look like this:
 
 ```
-PYTHONPATH=. python3 tests/unittest/benchmark_runner/common/template_operations/generate_golden_files.py
-git add tests/unittest/benchmark_runner/common/templates/golden_files
-git commit -m "Update golden files"
-```
-
-If you remove any YAML files, you must identify the changed files and
-`git rm` them before committing the result.
-
-The check is run automatically as part of the unit tests; if you want
-to run it manually, you can do so as follows.  The test should take
-only a few seconds to run.
-
-```
-$ PYTHONPATH=. python3 -m pytest -v tests/unittest/benchmark_runner/common/template_operations/
+$ make all
 ============================== test session starts ===============================
 platform linux -- Python 3.9.5, pytest-6.2.2, py-1.10.0, pluggy-0.13.1 -- /usr/bin/python3
 cachedir: .pytest_cache
@@ -72,6 +68,13 @@ collected 1 item
 tests/unittest/benchmark_runner/common/templates/test_golden_files.py::test_golden_files PASSED [100%]
 
 =============================== 1 passed in 1.85s ================================
+```
+
+If the check succeeds, you need to add and commit the golden files:
+
+```
+$ git add tests/unittest/benchmark_runner/common/templates/golden_files
+$ git commit -m "Update golden files"
 ```
 
 This test uses synthetic environment variables that you do not need to
@@ -223,10 +226,10 @@ any template .yaml files.
       6. Save & test
 2. Open grafana dashboard benchmark-runner-report:
    1. Open grafana
-   2. Create(+) -> import -> paste [grafana/func/benchmark-runner-report.json](grafana/func/benchmark-runner-report.json) -> Load
-   3. Create panel from scratch or duplicate existing on (stressng/uperf)
+   2. Create(+) -> import -> paste [grafana/func/dashboard.json](benchmark_runner/grafana/func/dashboard.json) -> Load
+   3. Create panel from scratch or duplicate existing on (e.g. uperf)
    4. Configure the workload related metrics
-   5. Save dashboard -> share -> Export -> view json -> Copy to clipboard -> override existing one [grafana/func/benchmark-runner-report.json](grafana/func/benchmark-runner-report.json)
+   5. Save dashboard -> share -> Export -> view json -> Copy to clipboard -> override existing one [grafana/func/dashboard.json](benchmark_runner/grafana/func/dashboard.json)
    
 ### Data template 
 
@@ -287,7 +290,7 @@ Boilerplate data that is independent of workload has been moved to `common.yaml`
       1. Pass all mandatory parameters in [benchmark_runner/main/environment_variables.py](benchmark_runner/main/environment_variables.py) or set their equivalent variables in the environment (command line options override environment variables):
          1. `--workload` (`WORKLOAD`) = e.g. stressng_pod
          2. `--runner-path` (`RUNNER_PATH`) = path to local cloned benchmark-operator (e.g. /home/user/)
-            1. git clone https://github.com/cloud-bulldozer/benchmark-operator  (inside `runner_path`)
+            1. git clone -b v1.0.2 https://github.com/cloud-bulldozer/benchmark-operator  (inside `runner_path`)
          3. `--kubeadmin_password` (`KUBEADMIN_PASSWORD`)
          4. `--pin-node-benchmark-operator` (`PIN_NODE_BENCHMARK_OPERATOR`) - benchmark-operator node selector
          5. `--pin-node1` (`PIN_NODE1`) - workload first node selector
@@ -305,7 +308,7 @@ Boilerplate data that is independent of workload has been moved to `common.yaml`
       3. Verify that benchmark-runner run the workload
    2. Run workload through integration/unittest tests [using pytest]
       1. Need to set all mandatory parameters in [tests/integration/benchmark_runner/test_environment_variables.py](tests/integration/benchmark_runner/test_environment_variables.py) in the environment.
-            1. git clone https://github.com/cloud-bulldozer/benchmark-operator (inside 'RUNNER_PATH')
+            1. git clone -b v1.0.2 https://github.com/cloud-bulldozer/benchmark-operator (inside 'RUNNER_PATH')
          2. `KUBEADMIN_PASSWORD`
          3. `PIN_NODE1` - workload first node selector
          4. `ELASTICSEARCH` - elasticsearch url without http prefix

@@ -25,11 +25,12 @@ class EnvironmentVariables:
             try:
                 with open(env) as f:
                     for line in f.readlines():
-                        key, found , value = line.strip().partition("=")
+                        key, found, value = line.strip().partition("=")
                         if not found:
                             print("ERROR: invalid line in {env}: {line.strip()}")
                             continue
-                        if key in os.environ: continue # prefer env to env file
+                        if key in os.environ:
+                            continue  # prefer env to env file
                         os.environ[key] = value
 
             except FileNotFoundError:
@@ -39,7 +40,7 @@ class EnvironmentVariables:
         # dynamic parameters - configure for local run
         # parameters for running workload
 
-        # This path is github actions runner path (benchmark-operator should be cloned here)
+        # This path is GitHub actions runner path (benchmark-operator should be cloned here)
         self._environment_variables_dict['runner_path'] = EnvironmentVariables.get_env('RUNNER_PATH', '/tmp')
         # This path is for vm/pod/prometheus run artifacts
         self._environment_variables_dict['run_artifacts'] = EnvironmentVariables.get_env('RUN_ARTIFACTS', os.path.join(self._environment_variables_dict['runner_path'], 'benchmark-runner-run-artifacts'))
@@ -69,14 +70,25 @@ class EnvironmentVariables:
         self._environment_variables_dict['elasticsearch_url_protocol'] = EnvironmentVariables.get_env('ELASTICSEARCH_URL_PROTOCOL', 'http')
 
         # Workaround for Kata CPU offline problem in 4.9/4.10
-        # Set to True to
         self._environment_variables_dict['kata_cpuoffline_workaround'] = EnvironmentVariables.get_boolean_from_environment('KATA_CPUOFFLINE_WORKAROUND', False)
+        # Kata thread-pool-size, default 16
+        self._environment_variables_dict['kata_thread_pool_size'] = EnvironmentVariables.get_boolean_from_environment('KATA_THREAD_POOL_SIZE', '16')
 
-        # Scale number in each node: 1,2,3
+        # Scale Per Node
         self._environment_variables_dict['scale'] = EnvironmentVariables.get_env('SCALE', '')
         # list of nodes per pod/vm, scale number per node, e.g: [ 'master-1', 'master-2' ] - run 1 pod/vm in each node
         self._environment_variables_dict['scale_nodes'] = EnvironmentVariables.get_env('SCALE_NODES', "")
+        self._environment_variables_dict['bulk_sleep_time'] = EnvironmentVariables.get_env('BULK_SLEEP_TIME', '30')
+        # CPU processors = threads limit
+        self._environment_variables_dict['threads_limit'] = EnvironmentVariables.get_env('THREADS_LIMIT', '')
+        # redis for synchronization
         self._environment_variables_dict['redis'] = EnvironmentVariables.get_env('REDIS', '')
+
+        # prometheus snap interval
+        self._environment_variables_dict['prometheus_snap_interval'] = EnvironmentVariables.get_env('PROMETHEUS_SNAP_INTERVAL', '30')
+
+        # windows url
+        self._environment_variables_dict['windows_url'] = EnvironmentVariables.get_env('WINDOWS_URL', '')
 
         # default parameter - change only if needed
         # Parameters below related to 'run_workload()'
@@ -89,7 +101,7 @@ class EnvironmentVariables:
                                                          'hammerdb_pod_mssql', 'hammerdb_vm_mssql', 'hammerdb_kata_mssql',
                                                          'hammerdb_pod_mssql_lso', 'hammerdb_vm_mssql_lso', 'hammerdb_kata_mssql_lso',
                                                          'vdbench_pod', 'vdbench_kata', 'vdbench_vm',
-                                                         'clusterbuster', 'oadp']
+                                                         'clusterbuster', 'bootstorm_vm', 'windows_vm', 'oadp']
         # Workloads namespaces
         self._environment_variables_dict['workload_namespaces'] = {
             'stressng': 'benchmark-operator',
@@ -97,7 +109,9 @@ class EnvironmentVariables:
             'uperf': 'benchmark-operator',
             'vdbench': 'benchmark-runner',
             'clusterbuster': 'clusterbuster',
-            'oadp': 'oadp-workload'
+            'oadp': 'oadp-workload',
+            'bootstorm': 'benchmark-runner',
+            'windows': 'benchmark-runner'
         }
 
         # Update namespace
@@ -111,7 +125,7 @@ class EnvironmentVariables:
             # TBD if this is not set
             self._environment_variables_dict['namespace'] = 'benchmark-operator'
 
-        # run workload with odf pvc True/False. True=ODF, False=Ephemeral
+        # run workload with odf pvc True/False. True=ODF(default), False=Ephemeral
         self._environment_variables_dict['odf_pvc'] = EnvironmentVariables.get_boolean_from_environment('ODF_PVC', True)
         if base_workload == 'hammerdb':
             if len(self._environment_variables_dict['workload'].split('_')) == self.HAMMERDB_LSO_LEN:
@@ -120,15 +134,15 @@ class EnvironmentVariables:
                 self._environment_variables_dict['storage_type'] = 'odf'
             else:
                 self._environment_variables_dict['storage_type'] = 'ephemeral'
-        # LSO Disk path
-        self._environment_variables_dict['lso_path'] = EnvironmentVariables.get_env('LSO_PATH', '')
+
+        # LSO Disk id - auto-detect when located on worker-2
+        self._environment_variables_dict['lso_disk_id'] = EnvironmentVariables.get_env('LSO_DISK_ID', '')
         # Workloads that required ODF
         self._environment_variables_dict['workloads_odf_pvc'] = ['vdbench', 'hammerdb']
         # This parameter get from Test_CI.yml file
         self._environment_variables_dict['build_version'] = EnvironmentVariables.get_env('BUILD_VERSION', '1.0.0')
-        # collect system metrics True/False - required by benchmark-operator
-        self._environment_variables_dict['system_metrics'] = EnvironmentVariables.get_boolean_from_environment('SYSTEM_METRICS',
-                                                                                                               bool(self.environment_variables_dict['elasticsearch']))
+        # collect system metrics True/False - required by benchmark-operator: @todo disable in OCP4.12.0-rc.5 - pod not create
+        self._environment_variables_dict['system_metrics'] = EnvironmentVariables.get_boolean_from_environment('SYSTEM_METRICS', False)
         # CI status update once at the end of CI pass/failed
         self._environment_variables_dict['ci_status'] = EnvironmentVariables.get_env('CI_STATUS', '')
         # Valid run types
@@ -185,12 +199,19 @@ class EnvironmentVariables:
         self._environment_variables_dict['bucket'] = EnvironmentVariables.get_env('IBM_BUCKET', 'oadp-result-bucket')
         self._environment_variables_dict['key'] = EnvironmentVariables.get_env('IBM_KEY', 'run-artifacts')
 
+        # Grafana
+        self._environment_variables_dict['grafana_url'] = EnvironmentVariables.get_env('GRAFANA_URL', '')
+        self._environment_variables_dict['grafana_api_key'] = EnvironmentVariables.get_env('GRAFANA_API_KEY', '')
+        self._environment_variables_dict['grafana_json_path'] = EnvironmentVariables.get_env('GRAFANA_JSON_PATH', '')
+        self._environment_variables_dict['main_libsonnet_path'] = EnvironmentVariables.get_env('MAIN_LIBSONNET_PATH', '')
+        self._environment_variables_dict['grafana_folder_name'] = EnvironmentVariables.get_env('GRAFANA_FOLDER_NAME', '')
+
         # Parameters below related to 'install_ocp()'
-        # MANDATORY for OCP install: install ocp version - insert version to install i.e. 'latest-4.8' : https://mirror.openshift.com/pub/openshift-v4/clients/ocp
+        # MANDATORY for OCP install: assisted installer version i.e. 'latest-4.11' or '4.11.16' : https://mirror.openshift.com/pub/openshift-v4/clients/ocp
         self._environment_variables_dict['install_ocp_version'] = EnvironmentVariables.get_env('INSTALL_OCP_VERSION', '')
-        # There are 2 steps run_ibm_ocp_ipi_installer/verify_install_complete
+        # There are 2 options: run_ibm_ocp_installer/verify_install_complete
         self._environment_variables_dict['install_step'] = EnvironmentVariables.get_env('INSTALL_STEP', '')
-        # github repository
+        # GitHub repository - for credentials updating
         self._environment_variables_dict['github_repository_short'] = EnvironmentVariables.get_env('GITHUB_REPOSITORY_SHORT', '')
 
         # Parameters below related to 'install_resource()'
@@ -204,17 +225,21 @@ class EnvironmentVariables:
         self._environment_variables_dict['quay_password'] = EnvironmentVariables.get_env('QUAY_PASSWORD', '')
         # odf version
         self._environment_variables_dict['odf_version'] = EnvironmentVariables.get_env('ODF_VERSION', '')
-        # number fo odf disk from ['sdb', 'sdc', 'sdd', 'sde']
-        self._environment_variables_dict['num_odf_disk'] = EnvironmentVariables.get_env('NUM_ODF_DISK', 1)
+        # custom kata version, if empty fetch auto latest version
+        self._environment_variables_dict['kata_csv'] = EnvironmentVariables.get_env('KATA_CSV', '')
+        # number of odf disk for discovery
+        self._environment_variables_dict['num_odf_disk'] = EnvironmentVariables.get_env('NUM_ODF_DISK', 4)
+        self._environment_variables_dict['worker_disk_ids'] = EnvironmentVariables.get_env('WORKER_DISK_IDS', "")
+        self._environment_variables_dict['worker_disk_prefix'] = EnvironmentVariables.get_env('WORKER_DISK_PREFIX', '')
         # install resources list
         self._environment_variables_dict['install_resources_list'] = EnvironmentVariables.get_env('INSTALL_RESOURCES_LIST', '')
 
         # Parameters below related to 'install_ocp()' and 'install_resource()'
-        # Mandatory: OCP environment flavor PERF or FUNC
-        self._environment_variables_dict['ocp_env_flavor'] = EnvironmentVariables.get_env('OCP_ENV_FLAVOR', 'FUNC')
+        # Mandatory: OCP environment flavor PERF or FUNC for updating GitHub secrets
+        self._environment_variables_dict['ocp_env_flavor'] = EnvironmentVariables.get_env('OCP_ENV_FLAVOR', 'PERF')
         # IBM data
         self._environment_variables_dict['ibm_api_key'] = EnvironmentVariables.get_env('IBM_API_KEY', '')
-        # github token
+        # GitHub token
         self._environment_variables_dict['github_token'] = EnvironmentVariables.get_env('GITHUB_TOKEN', '')
         self._environment_variables_dict['worker_ids'] = EnvironmentVariables.get_env(f'WORKER_IDS', "")
         self._environment_variables_dict['provision_ip'] = EnvironmentVariables.get_env(f'PROVISION_IP', '')
@@ -231,9 +256,9 @@ class EnvironmentVariables:
         self._environment_variables_dict['provision_installer_path'] = EnvironmentVariables.get_env(f'PROVISION_INSTALLER_PATH', '')
         self._environment_variables_dict['provision_installer_cmd'] = EnvironmentVariables.get_env(f'PROVISION_INSTALLER_CMD', '')
         self._environment_variables_dict['provision_installer_log'] = EnvironmentVariables.get_env(f'PROVISION_INSTALLER_LOG', '')
-        # remote ssh timeout - 3 hours for installation time
+        # timeout 0<=: forever, >0: second (installer)
         self._environment_variables_dict['provision_timeout'] = EnvironmentVariables.get_env(f'PROVISION_TIMEOUT', '10800')
-        # General timeout - 1.5 hours wait for pod/vm/upload data to elasticsearch
+        # timeout 0<=: forever, >0: second
         self._environment_variables_dict['timeout'] = EnvironmentVariables.get_env(f'TIMEOUT', '3600')
 
         # Benchmark runner run artifacts url
@@ -244,6 +269,8 @@ class EnvironmentVariables:
         self._environment_variables_dict['ci_minutes_time'] = EnvironmentVariables.get_env('CI_MINUTES_TIME', 0)
         # Get this parameter from install resource process
         self._environment_variables_dict['ocp_resource_install_minutes_time'] = EnvironmentVariables.get_env('OCP_RESOURCE_INSTALL_MINUTES_TIME', 0)
+        # benchmark-runner last commit id
+        self._environment_variables_dict['benchmark_runner_id'] = EnvironmentVariables.get_env('BENCHMARK_RUNNER_ID', '')
         # benchmark-operator last commit id
         self._environment_variables_dict['benchmark_operator_id'] = EnvironmentVariables.get_env('BENCHMARK_OPERATOR_ID', '')
         # benchmark-wrapper last commit id

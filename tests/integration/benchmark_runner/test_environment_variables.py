@@ -23,6 +23,12 @@ def __get_test_environment_variable():
     test_environment_variable['elasticsearch_password'] = EnvironmentVariables.get_env('ELASTICSEARCH_PASSWORD', '')
     test_environment_variable['timeout'] = int(EnvironmentVariables.get_env('TIMEOUT', '2000'))
 
+    # Grafana
+    test_environment_variable['grafana_url'] = EnvironmentVariables.get_env('GRAFANA_URL', '')
+    test_environment_variable['grafana_api_key'] = EnvironmentVariables.get_env('GRAFANA_API_KEY', '')
+    test_environment_variable['grafana_json_path'] = EnvironmentVariables.get_env('GRAFANA_JSON_PATH', '')
+    test_environment_variable['grafana_json_path'] = EnvironmentVariables.get_env('GRAFANA_FOLDER_NAME', '')
+
     # end dynamic parameters - configure for local run
     ##################################################################################################
 
@@ -32,7 +38,7 @@ def __get_test_environment_variable():
     test_environment_variable['namespace'] = EnvironmentVariables.get_env('NAMESPACE', 'benchmark-operator')
     # run Hammerdb workload with ocs pvc
     test_environment_variable['ocs_pvc'] = EnvironmentVariables.get_boolean_from_environment('OCS_PVC', True)
-    test_environment_variable['system_metrics'] = EnvironmentVariables.get_boolean_from_environment('SYSTEM_METRICS', True)
+    test_environment_variable['system_metrics'] = EnvironmentVariables.get_boolean_from_environment('SYSTEM_METRICS', False)
     # Azure details
     test_environment_variable['azure_cluster_stop'] = EnvironmentVariables.get_env('AZURE_CLUSTER_STOP', '')
     test_environment_variable['azure_cluster_start'] = EnvironmentVariables.get_env('AZURE_CLUSTER_START', '')

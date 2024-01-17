@@ -90,7 +90,7 @@ def test_yaml_file_not_exist_error():
     oc = OC(kubeadmin_password=test_environment_variable['kubeadmin_password'])
     oc.login()
     with pytest.raises(YAMLNotExist) as err:
-        oc.create_pod_sync(yaml=os.path.join(f'{templates_path}', 'stressng1.yaml'), pod_name='stressng-pod-workload', timeout=-1)
+        oc.create_pod_sync(yaml=os.path.join(f'{templates_path}', 'stressng1.yaml'), pod_name='stressng-pod-workload', timeout=1)
 
 
 def test_create_sync_pod_timeout_error():
@@ -101,7 +101,7 @@ def test_create_sync_pod_timeout_error():
     oc = OC(kubeadmin_password=test_environment_variable['kubeadmin_password'])
     oc.login()
     with pytest.raises(PodNotCreateTimeout) as err:
-        oc.create_pod_sync(yaml=os.path.join(f'{templates_path}', 'stressng_pod.yaml'), pod_name='stressng-pod-workload', timeout=-1)
+        oc.create_pod_sync(yaml=os.path.join(f'{templates_path}', 'stressng_pod.yaml'), pod_name='stressng-pod-workload', timeout=1)
 
 
 def test_delete_sync_pod_timeout_error():
@@ -113,7 +113,7 @@ def test_delete_sync_pod_timeout_error():
     oc.login()
     oc.create_pod_sync(yaml=os.path.join(f'{templates_path}', 'stressng_pod.yaml'), pod_name='stressng-pod-workload')
     with pytest.raises(PodTerminateTimeout) as err:
-        oc.delete_pod_sync(yaml=os.path.join(f'{templates_path}', 'stressng_pod.yaml'), pod_name='stressng-pod-workload', timeout=-1)
+        oc.delete_pod_sync(yaml=os.path.join(f'{templates_path}', 'stressng_pod.yaml'), pod_name='stressng-pod-workload', timeout=1)
 
 
 def test_get_long_short_uuid():
@@ -142,10 +142,11 @@ def test_wait_for_pod_create_initialized_ready_completed_system_metrics_deleted(
     assert oc.wait_for_ready(label='app=stressng_workload', workload=workload)
     assert oc.wait_for_pod_completed(label='app=stressng_workload', workload=workload)
     # system-metrics
-    assert oc.wait_for_pod_create(pod_name='system-metrics-collector')
-    assert oc.wait_for_initialized(label='app=system-metrics-collector', workload=workload)
-    assert oc.wait_for_pod_completed(label='app=system-metrics-collector', workload=workload)
-    assert oc.delete_pod_sync(yaml=os.path.join(f'{templates_path}', 'stressng_pod.yaml'), pod_name='stressng-pod-workload')
+    if test_environment_variable['system_metrics']:
+        assert oc.wait_for_pod_create(pod_name='system-metrics-collector')
+        assert oc.wait_for_initialized(label='app=system-metrics-collector', workload=workload)
+        assert oc.wait_for_pod_completed(label='app=system-metrics-collector', workload=workload)
+        assert oc.delete_pod_sync(yaml=os.path.join(f'{templates_path}', 'stressng_pod.yaml'), pod_name='stressng-pod-workload')
 
 
 def test_wait_for_kata_create_initialized_ready_completed_system_metrics_deleted():
@@ -161,11 +162,11 @@ def test_wait_for_kata_create_initialized_ready_completed_system_metrics_deleted
     assert oc.wait_for_ready(label='app=stressng_workload', workload=workload)
     assert oc.wait_for_pod_completed(label='app=stressng_workload', workload=workload)
     # system-metrics
-    assert oc.wait_for_pod_create(pod_name='system-metrics-collector')
-    assert oc.wait_for_initialized(label='app=system-metrics-collector', workload=workload)
-    assert oc.wait_for_pod_completed(label='app=system-metrics-collector', workload=workload)
-    assert oc.delete_pod_sync(yaml=os.path.join(f'{templates_path}', 'stressng_kata.yaml'), pod_name='stressng-kata-workload')
-
+    if test_environment_variable['system_metrics']:
+        assert oc.wait_for_pod_create(pod_name='system-metrics-collector')
+        assert oc.wait_for_initialized(label='app=system-metrics-collector', workload=workload)
+        assert oc.wait_for_pod_completed(label='app=system-metrics-collector', workload=workload)
+        assert oc.delete_pod_sync(yaml=os.path.join(f'{templates_path}', 'stressng_kata.yaml'), pod_name='stressng-kata-workload')
 
 ###################################################### VM Tests ##################################################
 
@@ -178,7 +179,7 @@ def test_create_sync_vm_timeout_error():
     oc = OC(kubeadmin_password=test_environment_variable['kubeadmin_password'])
     oc.login()
     with pytest.raises(VMNotCreateTimeout) as err:
-        oc.create_vm_sync(yaml=os.path.join(f'{templates_path}', 'stressng_vm.yaml'), vm_name='stressng-vm-workload', timeout=-1)
+        oc.create_vm_sync(yaml=os.path.join(f'{templates_path}', 'stressng_vm.yaml'), vm_name='stressng-vm-workload', timeout=1)
 
 
 @pytest.mark.skip(reason="Already verified in: test_vm_create_initialized_ready_completed_system_metrics_deleted ")
@@ -189,7 +190,7 @@ def test_oc_get_vm_name_and_is_vm_exist():
     """
     oc = OC(kubeadmin_password=test_environment_variable['kubeadmin_password'])
     oc.login()
-    oc._create_async(yaml=os.path.join(f'{templates_path}', 'stressng_vm.yaml'))
+    oc.create_async(yaml=os.path.join(f'{templates_path}', 'stressng_vm.yaml'))
     # wait 60 sec till vm will be created
     time.sleep(60)
     assert oc._get_vm_name(vm_name='stressng-vm-workload', namespace=test_environment_variable['namespace'])
@@ -204,7 +205,7 @@ def test_wait_for_vm_created():
     """
     oc = OC(kubeadmin_password=test_environment_variable['kubeadmin_password'])
     oc.login()
-    oc._create_async(yaml=os.path.join(f'{templates_path}', 'stressng_vm.yaml'))
+    oc.create_async(yaml=os.path.join(f'{templates_path}', 'stressng_vm.yaml'))
     assert oc.wait_for_vm_create(vm_name='stressng-vm-workload')
 
 

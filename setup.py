@@ -4,7 +4,7 @@ from os import path
 from setuptools import setup, find_packages
 
 
-__version__ = '1.0.399'
+__version__ = '1.0.564'
 
 
 here = path.abspath(path.dirname(__file__))
@@ -41,24 +41,26 @@ setup(
     packages=find_packages(include=['benchmark_runner', 'benchmark_runner.*']),
 
     install_requires=[
-        'attrs==21.4.0', # readthedocs
+        'attrs==21.4.0',  # readthedocs
         'azure==4.0.0',
         'boto3==1.26.1',  # s3
         'botocore==1.29.1',  # s3
-        'cryptography==36.0.2',  # Remove once https://github.com/paramiko/paramiko/issues/2038 gets fixed.
+        'cryptography==41.0.6',  # for paramiko
         'elasticsearch==7.16.1',
         'elasticsearch_dsl==7.4.0',  # for deep search
-        'jinja2==3.0.3',
+        'ipywidgets==8.0.6',  # for jupyterlab widgets
+        'jinja2==3.1.3',  # for yaml templates and df.style
         'myst-parser==0.17.0',  # readthedocs
         'openshift-client==1.0.17',  # clusterbuster && prometheus metrics
         'prometheus-api-client==0.5.1',  # clusterbuster && prometheus metrics
         'pandas',  # required latest
-        'paramiko==2.10.1',
+        'paramiko==3.4.0',
         'PyGitHub==1.55',  # update secrets
         'PyYAML==6.0',
         'sphinx==4.5.0',  # readthedocs
         'sphinx-rtd-theme==1.0.0',  # readthedocs
         'tenacity==8.0.1',  # retry decorator
+        'tqdm==4.65.0',  # for jupyterlab download file
         'typeguard==2.12.1',
         'typing==3.7.4.3',
         # must add new package inside requirements.txt

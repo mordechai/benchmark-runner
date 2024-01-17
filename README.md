@@ -5,7 +5,7 @@
 -----------------
 
 # Benchmark-Runner: Running benchmarks
-[![Actions Status](https://github.com/redhat-performance/benchmark-runner/workflows/CI/badge.svg)](https://github.com/redhat-performance/benchmark-runner/actions)
+[![Actions Status](https://github.com/redhat-performance/benchmark-runner/actions/workflows/Perf_Env_Build_Test_CI.yml/badge.svg)](https://github.com/redhat-performance/benchmark-runner/actions)
 [![PyPI Latest Release](https://img.shields.io/pypi/v/benchmark-runner.svg)](https://pypi.org/project/benchmark-runner/)
 [![Container Repository on Quay](https://quay.io/repository/projectquay/quay/status "Container Repository on Quay")](https://quay.io/repository/ebattat/benchmark-runner?tab=tags)
 [![Coverage Status](https://coveralls.io/repos/github/redhat-performance/benchmark-runner/badge.svg?branch=main)](https://coveralls.io/github/redhat-performance/benchmark-runner?branch=main&kill_cache=1)
@@ -24,6 +24,9 @@ This framework support the following embedded workloads:
 * [stressng](https://wiki.ubuntu.com/Kernel/Reference/stress-ng): running stressng workload in Pod, Kata or VM [Configuration](benchmark_runner/common/template_operations/templates/stressng)
 * [uperf](http://uperf.org/): running uperf workload in Pod, Kata or VM with [Configuration](benchmark_runner/common/template_operations/templates/uperf)
 * [vdbench](https://wiki.lustre.org/VDBench/): running vdbench workload in Pod, Kata or VM with [Configuration](benchmark_runner/common/template_operations/templates/vdbench)
+* [bootstorm](https://en.wiktionary.org/wiki/boot_storm): calculate VMs boot load time [Configuration](benchmark_runner/common/template_operations/templates/bootstorm)
+
+** For hammerdb mssql must run once [permission](https://github.com/redhat-performance/benchmark-runner/blob/main/benchmark_runner/common/ocp_resources/custom/template/02_mssql_patch_template.sh)
 
 Benchmark-runner grafana dashboard example:
 ![](media/grafana.png)
@@ -54,13 +57,19 @@ _**Table of Contents**_
 
 The following options may be passed via command line flags or set in the environment:
 
+**mandatory:** KUBEADMIN_PASSWORD=$KUBEADMIN_PASSWORD
+
+**mandatory:** $KUBECONFIG [ kubeconfig file path]
+
 **mandatory:** WORKLOAD=$WORKLOAD
 
 Choose one from the following list:
 
-`['stressng_pod', 'stressng_vm', 'stressng_kata', 'uperf_pod', 'uperf_vm', 'uperf_kata', 'hammerdb_pod_mariadb', 'hammerdb_vm_mariadb', 'hammerdb_kata_mariadb', 'hammerdb_pod_mariadb_lso', 'hammerdb_vm_mariadb_lso', 'hammerdb_kata_mariadb_lso', 'hammerdb_pod_postgres', 'hammerdb_vm_postgres', 'hammerdb_kata_postgres', 'hammerdb_pod_postgres_lso', 'hammerdb_vm_postgres_lso', 'hammerdb_kata_postgres_lso', 'hammerdb_pod_mssql', 'hammerdb_vm_mssql', 'hammerdb_kata_mssql', 'hammerdb_pod_mssql_lso', 'hammerdb_vm_mssql_lso', 'hammerdb_kata_mssql_lso', 'vdbench_pod', 'vdbench_kata', 'vdbench_vm', 'clusterbuster']`
+`['stressng_pod', 'stressng_vm', 'stressng_kata', 'uperf_pod', 'uperf_vm', 'uperf_kata', 'hammerdb_pod_mariadb', 'hammerdb_vm_mariadb', 'hammerdb_kata_mariadb', 'hammerdb_pod_mariadb_lso', 'hammerdb_vm_mariadb_lso', 'hammerdb_kata_mariadb_lso', 'hammerdb_pod_postgres', 'hammerdb_vm_postgres', 'hammerdb_kata_postgres', 'hammerdb_pod_postgres_lso', 'hammerdb_vm_postgres_lso', 'hammerdb_kata_postgres_lso', 'hammerdb_pod_mssql', 'hammerdb_vm_mssql', 'hammerdb_kata_mssql', 'hammerdb_pod_mssql_lso', 'hammerdb_vm_mssql_lso', 'hammerdb_kata_mssql_lso', 'vdbench_pod', 'vdbench_kata', 'vdbench_vm', 'clusterbuster', 'bootstorm_vm']`
 
 ** clusterbuster workloads: cpusoaker, files, fio, uperf. for more details [see](https://github.com/RobertKrawitz/OpenShift4-tools)
+
+Not mandatory:
 
 **auto:** NAMESPACE=benchmark-operator [ The default namespace is benchmark-operator ]
 
@@ -68,11 +77,9 @@ Choose one from the following list:
 
 **auto:** EXTRACT_PROMETHEUS_SNAPSHOT=True [ True=extract Prometheus snapshot into artifacts, false=don't, default True ]
 
-**auto:** SYSTEM_METRICS=True [ True=collect metric, False=not collect metrics, default True ]
+**auto:** SYSTEM_METRICS=False [ True=collect metric, False=not collect metrics, default False ]
 
 **auto:** RUNNER_PATH=/tmp [ The default work space is /tmp ]
-
-**optional:** KUBEADMIN_PASSWORD=$KUBEADMIN_PASSWORD
 
 **optional:** PIN_NODE_BENCHMARK_OPERATOR=$PIN_NODE_BENCHMARK_OPERATOR [node selector for benchmark operator pod]
 
@@ -86,16 +93,20 @@ Choose one from the following list:
 
 **optional:** CLUSTER=$CLUSTER [ set CLUSTER='kubernetes' to run workload on a kubernetes cluster, default 'openshift' ]
 
-**optional:** SCALE=SCALE [For Vdbench only: Scale in each node]
+**optional:scale** SCALE=$SCALE [For Vdbench/Bootstorm: Scale in each node]
 
-**optional:** SCALE_NODES=SCALE_NODES [For Vdbench only: Scale's node]
+**optional:scale** SCALE_NODES=$SCALE_NODES [For Vdbench/Bootstorm: Scale's node]
 
-**optional:** REDIS=REDIS [For Vdbench only: redis for scale synchronization]
+**optional:scale** REDIS=$REDIS [For Vdbench only: redis for scale synchronization]
+
+**optional:** LSO_DISK_ID=$LSO_DISK_ID [LSO_DISK_ID='scsi-<replace_this_with_your_actual_disk_id>' For using LSO Operator in hammerdb]
+
+**optional:** WORKER_DISK_IDS=$WORKER_DISK_IDS [WORKER_DISK_IDS For ODF/LSO workloads hammerdb/vdbench]
 
 For example:
 
 ```sh
-podman run --rm -e log_level=INFO -v $KUBECONFIG:/root/.kube/config --privileged quay.io/ebattat/benchmark-runner:lateste --workload=$WORKLOAD --kubeadmin-password=$KUBEADMIN_PASSWORD --pin-node-benchmark-operator=$PIN_NODE_BENCHMARK_OPERATOR --pin-node1=$PIN_NODE1 --pin-node2=$PIN_NODE2 --elasticsearch=$ELASTICSEARCH --elasticsearch-port=$ELASTICSEARCH_PORT
+podman run --rm --workload=$WORKLOAD --kubeadmin-password=$KUBEADMIN_PASSWORD --pin-node-benchmark-operator=$PIN_NODE_BENCHMARK_OPERATOR --pin-node1=$PIN_NODE1 --pin-node2=$PIN_NODE2 --elasticsearch=$ELASTICSEARCH --elasticsearch-port=$ELASTICSEARCH_PORT -v $KUBECONFIG:/root/.kube/config --privileged quay.io/ebattat/benchmark-runner:latest
 ```
 or
 ```sh
@@ -104,7 +115,7 @@ podman run --rm -e WORKLOAD=$WORKLOAD -e KUBEADMIN_PASSWORD=$KUBEADMIN_PASSWORD 
 SAVE RUN ARTIFACTS LOCAL:
 1. add `-e SAVE_ARTIFACTS_LOCAL='True'` or `--save-artifacts-local=true`
 2. add `-v /tmp:/tmp`
-3. git clone https://github.com/cloud-bulldozer/benchmark-operator /tmp/benchmark-operator
+3. git clone -b v1.0.2 https://github.com/cloud-bulldozer/benchmark-operator /tmp/benchmark-operator
 
 ### Run vdbench workload in Pod using OpenShift
 ![](media/benchmark-runner-demo.gif)
@@ -119,10 +130,9 @@ SAVE RUN ARTIFACTS LOCAL:
 ## Grafana dashboards
 
 There are 2 grafana dashboards templates:
-1. [grafana/func/benchmark-runner-ci-status-report.json](grafana/func/benchmark-runner-ci-status-report.json)
-   ![](media/benchmark-runner-ci-status.png)
-2. [grafana/func/benchmark-runner-report.json](grafana/func/benchmark-runner-report.json)
-   ![](media/benchmark-runner-report.png)
+1. [FuncCi dashboard](benchmark_runner/grafana/func/dashboard.json)
+2. [PerfCi dashboard](benchmark_runner/grafana/perf/dashboard.json)
+** PerfCi dashboard is generated automatically in [Build GitHub actions](https://github.com/redhat-performance/benchmark-runner/blob/main/.github/workflows/Perf_Env_Build_Test_CI.yml) from [main.libsonnet](benchmark_runner/grafana/perf/jsonnet/main.libsonnet)
 
 ** After importing json in grafana, you need to configure elasticsearch data source. (for more details: see [HOW_TO.md](HOW_TO.md))
 

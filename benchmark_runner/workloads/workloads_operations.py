@@ -1,14 +1,16 @@
 
 import ast
 import os
+import time
 import datetime
 import tarfile
 import shutil
 from csv import DictReader
 
 from benchmark_runner.common.logger.logger_time_stamp import logger_time_stamp
-from benchmark_runner.workloads.workloads_exceptions import ODFNonInstalled
+from benchmark_runner.workloads.workloads_exceptions import ODFNotInstalled, CNVNotInstalled, KataNotInstalled, MissingScaleNodes, MissingRedis
 from benchmark_runner.common.oc.oc import OC
+from benchmark_runner.common.virtctl.virtctl import Virtctl
 from benchmark_runner.common.elasticsearch.elasticsearch_operations import ElasticSearchOperations
 from benchmark_runner.main.environment_variables import environment_variables
 from benchmark_runner.common.clouds.shared.s3.s3_operations import S3Operations
@@ -16,12 +18,16 @@ from benchmark_runner.common.prometheus.prometheus_snapshot import PrometheusSna
 from benchmark_runner.common.prometheus.prometheus_snapshot_exceptions import PrometheusSnapshotError
 from benchmark_runner.common.template_operations.template_operations import TemplateOperations
 from benchmark_runner.common.clouds.IBM.ibm_operations import IBMOperations
+from benchmark_runner.common.prometheus.prometheus_metrics_operations import PrometheusMetricsOperation
 
 
 class WorkloadsOperations:
     oc = None
+    MILLISECONDS = 1000
+    REPEAT_TIMES = 3
+    SLEEP_TIME = 3
     """
-    This class run workloads
+    This class contains workloads operations
     """
     def __init__(self):
         # environment variables
@@ -50,10 +56,23 @@ class WorkloadsOperations:
         self._es_password = self._environment_variables_dict.get('elasticsearch_password', '')
         self._es_url_protocol = self._environment_variables_dict['elasticsearch_url_protocol']
         self._scale = self._environment_variables_dict.get('scale', '')
+        self._redis = self._environment_variables_dict.get('redis', '')
+        self._threads_limit = self._environment_variables_dict.get('threads_limit', '')
+        self._kata_thread_pool_size = self._environment_variables_dict.get('kata_thread_pool_size', '')
         if self._scale:
             self._scale = int(self._scale)
             self._scale_nodes = self._environment_variables_dict.get('scale_nodes', '')
+            self._redis = self._environment_variables_dict.get('redis', '')
+            if not self._scale_nodes:
+                raise MissingScaleNodes()
+            if not self._redis and 'vdbench' in self._workload:
+                raise MissingRedis()
             self._scale_node_list = ast.literal_eval(self._scale_nodes)
+            if self._threads_limit:
+                self._threads_limit = int(self._threads_limit)
+            else:
+                self._threads_limit = self._scale * len(self._scale_node_list)
+            self._bulk_sleep_time = int(self._environment_variables_dict.get('bulk_sleep_time', ''))
         else:
             self._scale_node_list = []
         self._timeout = int(self._environment_variables_dict.get('timeout', ''))
@@ -67,29 +86,35 @@ class WorkloadsOperations:
                                                            timeout=self._timeout)
         # Generate templates class
         self._template = TemplateOperations(workload=self._workload)
-        # set oc login
 
+        # set oc login
         if WorkloadsOperations.oc is None:
             WorkloadsOperations.oc = self.set_login(kubeadmin_password=self._kubeadmin_password)
         self._oc = WorkloadsOperations.oc
+        self._virtctl = Virtctl()
 
-        # PrometheusSnapshot
+        # Prometheus Snapshot
         if self._enable_prometheus_snapshot:
             self._snapshot = PrometheusSnapshot(oc=self._oc, artifacts_path=self._run_artifacts_path, verbose=True)
+        self._prometheus_snap_interval = self._environment_variables_dict.get('prometheus_snap_interval', '')
+        self._prometheus_metrics_operation = PrometheusMetricsOperation()
+        if self._environment_variables_dict.get('windows_url', ''):
+            file_name = os.path.basename(self._environment_variables_dict.get('windows_url', ''))
+            self._windows_os = os.path.splitext(file_name)[0]
 
     def __get_workload_file_name(self, workload):
-            """
-            This method returns workload name
-            :return:
-            """
-            if self._scale:
-                return f'{workload}-scale-{self._time_stamp_format}'
-            else:
-                return f'{workload}-{self._time_stamp_format}'
+        """
+        This method returns workload name
+        :return:
+        """
+        if self._scale:
+            return f'{workload}-scale-{self._time_stamp_format}'
+        else:
+            return f'{workload}-{self._time_stamp_format}'
 
     def set_login(self, kubeadmin_password: str = ''):
         """
-        This method set oc login
+        This method sets login
         :param kubeadmin_password:
         :return: oc instance
         """
@@ -100,7 +125,7 @@ class WorkloadsOperations:
     @logger_time_stamp
     def delete_all(self):
         """
-        This method delete all resources in namespace
+        This method deletes all resources in namespace
         :return:
         """
         self._oc.delete_namespace()
@@ -108,7 +133,7 @@ class WorkloadsOperations:
     @logger_time_stamp
     def start_prometheus(self):
         """
-        This method start collection of Prometheus snapshot
+        This method starts collection of Prometheus snapshot
         :return:
         """
         if self._enable_prometheus_snapshot:
@@ -122,7 +147,7 @@ class WorkloadsOperations:
     @logger_time_stamp
     def end_prometheus(self):
         """
-        This method retrieve the Prometheus snapshot
+        This method retrieves the Prometheus snapshot
         :return:
         """
         if self._enable_prometheus_snapshot:
@@ -134,40 +159,40 @@ class WorkloadsOperations:
                 raise err
 
     @logger_time_stamp
-    def odf_pvc_verification(self):
+    def odf_workload_verification(self):
         """
-        This method verified if odf or pvc is required for workload, raise error in case of missing odf
+        This method verifies whether the ODF operator is installed for ODF workloads and raises an error if it is missing.
         :return:
         """
         workload_name = self._workload.split('_')
         if workload_name[0] in self._workloads_odf_pvc:
             if not self._oc.is_odf_installed():
-                raise ODFNonInstalled()
+                raise ODFNotInstalled(workload=self._workload)
 
     def _create_vm_log(self, labels: list) -> str:
         """
-        This method set vm log per workload
+        This method sets vm log per workload
         :param labels: list of labels
         :return: vm_name
         """
         vm_name = ''
         for label in labels:
             vm_name = self._oc.get_vm(label=label)
-            self._oc.save_vm_log(vm_name=vm_name)
+            self._virtctl.save_vm_log(vm_name=vm_name)
         return vm_name
 
-    def _create_pod_log(self, pod: str = ''):
+    def _create_pod_log(self, pod: str = '', log_type: str = ''):
         """
-        This method create pod log per workload
+        This method creates pod log per workload
         :param pod: pod name
         :return: save_pod_log file
         """
         pod_name = self._oc.get_pod(label=pod)
-        return self._oc.save_pod_log(pod_name=pod_name)
+        return self._oc.save_pod_log(pod_name=pod_name, log_type=log_type)
 
     def _get_run_artifacts_hierarchy(self, workload_name: str = '', is_file: bool = False):
         """
-        This method return log hierarchy
+        This method returns log hierarchy
         :param workload_name: workload name
         :param is_file: is file name
         :return:
@@ -186,7 +211,7 @@ class WorkloadsOperations:
     @staticmethod
     def __is_float(value) -> bool:
         """
-        This method check if value is float
+        This method checks if value is float
         :param value:
         :return:
         """
@@ -198,20 +223,21 @@ class WorkloadsOperations:
 
     def _create_scale_logs(self):
         """
-        The method create scale logs
+        The method creates scale logs
         :return:
         """
-        self._create_pod_log(pod='state-signals-exporter')
-        self._create_pod_log(pod='redis-master')
+        self._create_pod_log(pod='state-signals-exporter', log_type='.log')
+        self._create_pod_log(pod='redis-master', log_type='.log')
 
-    def _create_pod_run_artifacts(self, pod_name: str):
+    def _create_pod_run_artifacts(self, pod_name: str, log_type: str):
         """
-        This method create pod run artifacts
+        This method creates pod run artifacts
         :param pod_name: pod name
-        :return: run results dict
+        :param log_type: log type extension
+        :return: run results list of dicts
         """
         result_list = []
-        pod_log_file = self._create_pod_log(pod=pod_name)
+        pod_log_file = self._create_pod_log(pod=pod_name, log_type=log_type)
         workload_name = self._environment_variables_dict.get('workload', '').replace('_', '-')
         # csv to dictionary
         the_reader = DictReader(open(pod_log_file, 'r'))
@@ -228,23 +254,24 @@ class WorkloadsOperations:
             result_list.append(dict(line_dict))
         return result_list
 
-    def _create_vm_run_artifacts(self, vm_name: str, start_stamp: str, end_stamp: str):
+    def _create_vm_run_artifacts(self, vm_name: str, start_stamp: str, end_stamp: str, log_type: str):
         """
-        This method create vm run artifacts
+        This method creates vm run artifacts
         :param vm_name: vm name
         :param start_stamp: start stamp
         :param end_stamp: end stamp
+        :param log_type: log type extension
         :return: run results dict
         """
         result_list = []
         results_list = self._oc.extract_vm_results(vm_name=vm_name, start_stamp=start_stamp, end_stamp=end_stamp)
         workload_name = self._environment_variables_dict.get('workload', '').replace('_', '-')
-        # save scale pod logs
+        # save scale pod log
         if self._scale:
-            self._create_pod_log(pod='state-signals-exporter')
-            self._create_pod_log(pod='redis-master')
+            self._create_pod_log(pod='state-signals-exporter', log_type='.log')
+            self._create_pod_log(pod='redis-master', log_type='.log')
         # insert results to csv
-        csv_result_file = os.path.join(self._run_artifacts_path, f'{vm_name}_result.csv')
+        csv_result_file = os.path.join(self._run_artifacts_path, f'{vm_name}{log_type}')
         with open(csv_result_file, 'w') as out:
             for row in results_list:
                 if row:
@@ -266,7 +293,7 @@ class WorkloadsOperations:
 
     def __make_run_artifacts_tarfile(self, workload: str):
         """
-        This method tar.gz log path and return the tar.gz path
+        This method compresses the log file and returns the compressed path
         :return:
         """
         tar_run_artifacts_path = f"{self._run_artifacts_path}.tar.gz"
@@ -278,7 +305,7 @@ class WorkloadsOperations:
     @logger_time_stamp
     def delete_local_artifacts(self):
         """
-        This method delete local artifacts
+        This method deletes local artifacts
         :return:
         """
         workload = self._workload.replace('_', '-')
@@ -312,8 +339,8 @@ class WorkloadsOperations:
 
     def __get_metadata(self, kind: str = None, status: str = None, result: dict = None) -> dict:
         """
-        This method return metadata kind and database argument are optional
-        @param kind: optional: pod, vm, or kata
+        This method returns metadata for a run, optionally updates by runtime kind
+        @param kind: optionally: pod, vm, or kata
         @param status:
         @param result:
         :return:
@@ -321,7 +348,8 @@ class WorkloadsOperations:
         date_format = '%Y_%m_%d'
         metadata = {'ocp_version': self._oc.get_ocp_server_version(),
                     'cnv_version': self._oc.get_cnv_version(),
-                    'kata_version': self._oc.get_kata_version(),
+                    'kata_version': self._oc.get_kata_operator_version(),
+                    'kata_rpm_version': self._oc.get_kata_rpm_version(node=self._pin_node1),
                     'odf_version': self._oc.get_odf_version(),
                     'runner_version': self._build_version,
                     'version': int(self._build_version.split('.')[-1]),
@@ -329,18 +357,20 @@ class WorkloadsOperations:
                     'ci_date': datetime.datetime.now().strftime(date_format),
                     'uuid': self._uuid,
                     'pin_node1': self._pin_node1,
-                    'pin_node2': self._pin_node2}
+                    'pin_node2': self._pin_node2,
+                    # display -1 when 0,1 for avoiding conflict with 0/1 status code
+                    'odf_disk_count': -1 if self._oc.get_odf_disk_count() in {0, 1} else self._oc.get_odf_disk_count()
+}
         if kind:
             metadata.update({'kind': kind})
         if status:
             metadata.update({'run_status': status})
         if self._scale:
             metadata.update({'scale': int(self._scale)*len(self._scale_node_list)})
-            count = 0
-            for scale_node in range(len(self._scale_node_list)):
-                for scale_num in range(self._scale):
-                    count += 1
-                    metadata.update({f'scale-{kind}--node-{count}': self._scale_node_list[scale_node]})
+        if 'bootstorm' in self._workload:
+            metadata.update({'vm_os_version': 'fedora37'})
+        if 'windows' in self._workload:
+            metadata.update({'vm_os_version': self._windows_os})
         if result:
             metadata.update(result)
 
@@ -348,7 +378,7 @@ class WorkloadsOperations:
 
     def _upload_to_elasticsearch(self, index: str, kind: str, status: str, result: dict = None):
         """
-        This method upload to elasticsearch
+        This method uploads results to elasticsearch
         :param index:
         :param kind:
         :param status:
@@ -359,7 +389,7 @@ class WorkloadsOperations:
 
     def _verify_elasticsearch_data_uploaded(self, index: str, uuid: str):
         """
-        This method verify that elasticsearch data uploaded
+        This method verifies that elasticsearch data was uploaded
         :param index:
         :param uuid:
         :return:
@@ -367,13 +397,14 @@ class WorkloadsOperations:
         self._es_operations.verify_elasticsearch_data_uploaded(index=index, uuid=uuid)
 
     @logger_time_stamp
-    def update_ci_status(self, status: str, ci_minutes_time: int, benchmark_operator_id: str, benchmark_wrapper_id: str, ocp_install_minutes_time: int = 0, ocp_resource_install_minutes_time: int = 0):
+    def update_ci_status(self, status: str, ci_minutes_time: int, benchmark_runner_id: str, benchmark_operator_id: str, benchmark_wrapper_id: str, ocp_install_minutes_time: int = 0, ocp_resource_install_minutes_time: int = 0):
         """
-        This method update ci status Pass/Failed
+        This method updates ci status Pass/Failed
         :param status: Pass/Failed
         :param ci_minutes_time: ci time in minutes
-        :param benchmark_wrapper_id: benchmark_wrapper last repository commit id
+        :param benchmark_runner_id: benchmark_runner last repository commit id
         :param benchmark_operator_id: benchmark_operator last repository commit id
+        :param benchmark_wrapper_id: benchmark_wrapper last repository commit id
         :param ocp_install_minutes_time: ocp install minutes time, default 0 because ocp install run once a week
         :param ocp_resource_install_minutes_time: ocp install minutes time, default 0 because ocp install run once a week
         :return:
@@ -389,14 +420,27 @@ class WorkloadsOperations:
             ibm_operations.ibm_connect()
             ocp_install_minutes_time = ibm_operations.get_ocp_install_time()
             ibm_operations.ibm_disconnect()
-        metadata.update({'status': status, 'status#': status_dict[status], 'ci_minutes_time': ci_minutes_time, 'benchmark_operator_id': benchmark_operator_id, 'benchmark_wrapper_id': benchmark_wrapper_id, 'ocp_install_minutes_time': ocp_install_minutes_time, 'ocp_resource_install_minutes_time': ocp_resource_install_minutes_time})
+        metadata.update({'status': status, 'status#': status_dict[status], 'ci_minutes_time': ci_minutes_time, 'benchmark_runner_id': benchmark_runner_id, 'benchmark_operator_id': benchmark_operator_id, 'benchmark_wrapper_id': benchmark_wrapper_id, 'ocp_install_minutes_time': ocp_install_minutes_time, 'ocp_resource_install_minutes_time': ocp_resource_install_minutes_time})
         self._es_operations.upload_to_elasticsearch(index=es_index, data=metadata)
+
+    @logger_time_stamp
+    def split_run_bulks(self, iterable: range, limit: int = 1):
+        """
+        This method splits run into bulk depends on threads limit
+        @return: run bulks
+        """
+        length = len(iterable)
+        for ndx in range(0, length, limit):
+            yield iterable[ndx:min(ndx + limit, length)]
 
     @logger_time_stamp
     def clear_nodes_cache(self):
         """
-        This method clear nodes cache
+        This method clears nodes cache
         """
+        for i in range(self.REPEAT_TIMES-1):
+            self._oc.clear_node_caches()
+            time.sleep(self.SLEEP_TIME)
         self._oc.clear_node_caches()
 
     def initialize_workload(self):
@@ -404,11 +448,17 @@ class WorkloadsOperations:
         This method includes all the initialization of workload
         :return:
         """
+        # Verify that CNV operator in installed for CNV workloads
+        if '_vm' in self._workload and not self._oc.is_cnv_installed():
+            raise CNVNotInstalled(workload=self._workload)
+        # Verify that Kata operator in installed for kata workloads
+        if '_kata' in self._workload and not self._oc.is_kata_installed():
+            raise KataNotInstalled(workload=self._workload)
         self.delete_all()
         self.clear_nodes_cache()
         if self._odf_pvc:
-            self.odf_pvc_verification()
-        self._template.generate_yamls(scale=str(self._scale), scale_nodes=self._scale_node_list)
+            self.odf_workload_verification()
+        self._template.generate_yamls(scale=str(self._scale), scale_nodes=self._scale_node_list, redis=self._redis, thread_limit=self._threads_limit)
         if self._enable_prometheus_snapshot:
             self.start_prometheus()
 
@@ -417,6 +467,7 @@ class WorkloadsOperations:
         This method includes all the finalization of workload
         :return:
         """
+        self._oc.collect_events()
         if self._enable_prometheus_snapshot:
             self.end_prometheus()
         if self._endpoint_url:

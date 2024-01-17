@@ -1,10 +1,10 @@
-
+import ast
 import os
 from jinja2 import Template
 
 from benchmark_runner.common.oc.oc import OC
 from benchmark_runner.main.environment_variables import environment_variables
-from benchmark_runner.common.ocp_resources.create_local_storage import CreateLocalStorage
+from benchmark_runner.common.ocp_resources.create_lso import CreateLSO
 from benchmark_runner.common.ocp_resources.create_odf import CreateODF
 from benchmark_runner.common.ocp_resources.create_kata import CreateKata
 from benchmark_runner.common.ocp_resources.create_cnv import CreateCNV
@@ -22,6 +22,12 @@ class CreateOCPResource:
         self.__oc = OC(kubeadmin_password=self.__environment_variables_dict.get('kubeadmin_password', ''))
         self.__oc.login()
         self.__oc.populate_additional_template_variables(self.__environment_variables_dict)
+        self.__worker_disk_prefix = self.__environment_variables_dict.get('worker_disk_prefix', '')
+        self.__worker_disk_ids = self.__environment_variables_dict.get('worker_disk_ids', '')
+        if self.__worker_disk_ids:
+            # Solved GitHub Actions issue that env variable detect as string instead of dict/ list
+            self.__worker_disk_ids = self.__worker_disk_ids.replace('"', '')
+            self.__worker_disk_ids = ast.literal_eval(self.__worker_disk_ids)
 
     @staticmethod
     def __get_yaml_files(path: str, extensions: list = ['.yaml', '.sh']):
@@ -61,34 +67,33 @@ class CreateOCPResource:
         resource_file_list = sorted(resource_file_list, key=lambda x: os.path.splitext(x)[0])
         return resource_file_list
 
-    def create_resource(self, resource: str, ibm_blk_disk_name: list = []):
+    def create_resource(self, resource: str):
         """
         This method create resource with verification
-        :param ibm_blk_disk_name: ibm blk name list
         :param resource:
         :return:
         """
         # remove resource files
         self.remove_resource_files(path=os.path.join(self.__dir_path, resource))
         resource_files = self.get_sorted_resources(resource=resource)
-        if 'local_storage' == resource:
-            self.__create_local_storage = CreateLocalStorage(self.__oc, path=os.path.join(self.__dir_path, resource), resource_list=resource_files)
-            self.__create_local_storage.create_local_storage()
+        if 'lso' == resource:
+            create_lso = CreateLSO(self.__oc, path=os.path.join(self.__dir_path, resource), resource_list=resource_files)
+            create_lso.create_lso()
         elif 'odf' == resource:
-            self.__create_odf = CreateODF(self.__oc, path=os.path.join(self.__dir_path, resource), resource_list=resource_files, ibm_blk_disk_name=ibm_blk_disk_name)
-            self.__create_odf.create_odf()
+            create_odf = CreateODF(self.__oc, path=os.path.join(self.__dir_path, resource), resource_list=resource_files, worker_disk_ids=self.__worker_disk_ids, worker_disk_prefix=self.__worker_disk_prefix)
+            create_odf.create_odf()
         elif 'kata' == resource:
-            self.__create_kata = CreateKata(self.__oc, path=os.path.join(self.__dir_path, resource), resource_list=resource_files)
-            self.__create_kata.create_kata()
+            create_kata = CreateKata(self.__oc, path=os.path.join(self.__dir_path, resource), resource_list=resource_files)
+            create_kata.create_kata()
         elif 'cnv' == resource:
-            self.__create_cnv = CreateCNV(self.__oc, path=os.path.join(self.__dir_path, resource), resource_list=resource_files)
-            self.__create_cnv.create_cnv()
+            create_cnv = CreateCNV(self.__oc, path=os.path.join(self.__dir_path, resource), resource_list=resource_files)
+            create_cnv.create_cnv()
         elif 'infra' == resource:
-            self.__create_infra = MigrateInfra(self.__oc, path=os.path.join(self.__dir_path, resource), resource_list=resource_files)
-            self.__create_infra.migrate_infra()
+            create_infra = MigrateInfra(self.__oc, path=os.path.join(self.__dir_path, resource), resource_list=resource_files)
+            create_infra.migrate_infra()
         elif 'custom' == resource:
-            self.__create_custom = CreateCustom(self.__oc, path=os.path.join(self.__dir_path, resource), resource_list=resource_files)
-            self.__create_custom.create_custom()
+            create_custom = CreateCustom(self.__oc, path=os.path.join(self.__dir_path, resource), resource_list=resource_files)
+            create_custom.create_custom()
             # remove resource files
         self.remove_resource_files(path=os.path.join(self.__dir_path, resource))
 

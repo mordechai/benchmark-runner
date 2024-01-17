@@ -8,17 +8,18 @@ from urllib3.exceptions import InsecureRequestWarning
 from urllib3 import disable_warnings
 disable_warnings(InsecureRequestWarning)
 
+from benchmark_runner.main.environment_variables import environment_variables
 from benchmark_runner.common.logger.logger_time_stamp import logger_time_stamp, logger
-from benchmark_runner.workloads.workloads_operations import WorkloadsOperations
 
 
-class PrometheusMetricsOperation(WorkloadsOperations):
+class PrometheusMetricsOperation:
     """
-    This class Run prometheus queries
+    This class contains methods for running prometheus queries, parsing the results into dictionary nad uploading it into elasticsearch
     """
 
     def __init__(self):
         super().__init__()
+        self._environment_variables_dict = environment_variables.environment_variables_dict
         self.__current_dir = os.path.dirname(os.path.abspath(__file__))
         self.__queries_file = os.path.join(self.__current_dir, 'metrics-default.yaml')
         self.__authorization = {'Authorization': self.__get_prometheus_token()}
@@ -26,6 +27,9 @@ class PrometheusMetricsOperation(WorkloadsOperations):
         self.__metrics_start_time = None
         self.__metrics_end_time = None
         self.__metric_results = {}
+        self._prometheus_snap_interval = self._environment_variables_dict.get('prometheus_snap_interval', '')
+        self._es_host = self._environment_variables_dict.get('elasticsearch', '')
+        self._es_port = self._environment_variables_dict.get('elasticsearch_port', '')
 
     @staticmethod
     def __get_prometheus_default_url():
@@ -75,7 +79,7 @@ class PrometheusMetricsOperation(WorkloadsOperations):
                 with openshift.project('openshift-monitoring'):
                     result = openshift.selector('pod/prometheus-k8s-0').object().execute(['date', '+%s.%N'],
                                                                                          container_name='prometheus')
-                    return datetime.datetime.utcfromtimestamp(float(result.out()))
+                    return datetime.datetime.fromtimestamp(float(result.out()))
             except Exception as err:
                 if retries <= 0:
                     raise f'Unable to retrieve date: {err}'
@@ -137,7 +141,10 @@ class PrometheusMetricsOperation(WorkloadsOperations):
                 continue
             try:
                 if 'instant' not in metric or metric['instant'] is not True:
-                    metric_result = self.__prometheus.custom_query_range(metric['query'], start_time=self.__metrics_start_time, end_time=self.__metrics_end_time, step='30')
+                    metric_result = self.__prometheus.custom_query_range(metric['query'],
+                                                                         start_time=self.__metrics_start_time,
+                                                                         end_time=self.__metrics_end_time,
+                                                                         step=self._prometheus_snap_interval)
                 else:
                     metric_result = (self.__prometheus.custom_query(metric['query']))
                 self.__metric_results[metric['metricName']] = metric_result
@@ -152,10 +159,38 @@ class PrometheusMetricsOperation(WorkloadsOperations):
         :return: 
         """
         pass
-        # if self._es_host and self._es_port:
-        #     for query, results in self.__metric_results.items():
-        #         pass
-        #         self._es_operations.upload_to_elasticsearch(index=query, data=results)
-        # else:
-        #     raise Exception('Missing ElasticSearch data')
-        
+        if self._es_host and self._es_port:
+            for query, results in self.__metric_results.items():
+                print(query, results)
+        else:
+            raise Exception('Missing ElasticSearch data')
+
+    @staticmethod
+    @logger_time_stamp
+    def parse_prometheus_metrics(data: dict):
+        """
+        This method parses prometheus metrics and returns summary result
+        based on queries: /benchmark_runner/common/prometheus/metrics-default.yaml
+        @return:
+        """
+        result_dict = {}
+        for query, data_list in data.items():
+            if 'containerCPU-benchmark-runner' in query:
+                suffix = 'CPU'
+            elif 'containerMemory-benchmark-runner' in query:
+                suffix = 'Memory'
+            else:
+                suffix = None
+            total = 0
+            max = 0
+            for item in data_list:
+                for val in item['values']:
+                    if float(val[1]) > max:
+                        max = round(float(val[1]), 3)
+                total = total + max
+                if not suffix:
+                    result_dict[f'{query}'] = max
+                else:
+                    result_dict[f"{item['metric']['node']}_{suffix}"] = max
+                    result_dict[f'total_{suffix}'] = total
+        return result_dict

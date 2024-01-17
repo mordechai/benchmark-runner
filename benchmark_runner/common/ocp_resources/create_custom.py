@@ -8,7 +8,7 @@ from benchmark_runner.common.ocp_resources.create_ocp_resource_operations import
 
 class CreateCustom(CreateOCPResourceOperations):
     """
-    This class is create OCP resources
+    This class is created Custom resource
     """
     def __init__(self, oc: OC, path: str, resource_list: list):
         super().__init__(oc)
@@ -27,4 +27,4 @@ class CreateCustom(CreateOCPResourceOperations):
             if resource.endswith('.sh'):
                 self.__oc.run(cmd=f'chmod +x {os.path.join(self.__path, resource)}; {self.__path}/./{resource}')
             else:
-                self.__oc._create_async(yaml=os.path.join(self.__path, resource))
+                self.__oc.create_async(yaml=os.path.join(self.__path, resource))

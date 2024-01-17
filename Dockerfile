@@ -16,7 +16,7 @@ Run dnf config-manager --set-enabled powertools \
 
 # Prerequisite for Python installation
 ARG python_full_version=3.10.8
-RUN dnf install openssl-devel bzip2-devel wget -y
+RUN dnf install openssl-devel bzip2-devel wget libffi-devel -y
 
 # Install Python
 RUN wget https://www.python.org/ftp/python/${python_full_version}/Python-${python_full_version}.tgz \
@@ -31,21 +31,17 @@ RUN wget https://www.python.org/ftp/python/${python_full_version}/Python-${pytho
 RUN python3.10 -m pip --no-cache-dir install --upgrade pip && pip --no-cache-dir install benchmark-runner --upgrade
 
 # install oc/kubectl client tools for OpenShift/Kubernetes
-ARG oc_version=4.11.0-0.okd-2022-10-15-073651
-RUN  curl -L https://github.com/openshift/okd/releases/download/${oc_version}/openshift-client-linux-${oc_version}.tar.gz -o  ~/openshift-client-linux-${oc_version}.tar.gz \
-     && tar -xzvf  ~/openshift-client-linux-${oc_version}.tar.gz -C  ~/ \
-     && rm -rf ~/openshift-client-linux-${oc_version}.tar.gz \
-     && cp ~/kubectl /usr/local/bin/kubectl \
-     && cp ~/oc /usr/local/bin/oc \
-     && rm -rf ~/kubectl \
-     && rm -rf ~/oc
+ARG OCP_CLIENT_VERSION="4.14.1"
+RUN  curl -L "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/${OCP_CLIENT_VERSION}/openshift-client-linux-${OCP_CLIENT_VERSION}.tar.gz" -o "/tmp/openshift-client-linux-${OCP_CLIENT_VERSION}.tar.gz" \
+     && tar -xzvf /tmp/openshift-client-linux-${OCP_CLIENT_VERSION}.tar.gz -C /tmp/ \
+     && mv /tmp/kubectl /usr/local/bin/kubectl \
+     && mv /tmp/oc /usr/local/bin/oc \
+     && rm -rf /tmp/openshift-client-linux-${OCP_CLIENT_VERSION}.tar.gz /tmp/kubectl /tmp/oc
 
-# install virtctl for VNC
-ARG virtctl_version=0.52.0
-RUN curl -L https://github.com/kubevirt/kubevirt/releases/download/v${virtctl_version}/virtctl-v${virtctl_version}-linux-amd64 -o  ~/virtctl \
-    && chmod +x ~/virtctl \
-    && cp ~/virtctl /usr/local/bin/virtctl \
-    && rm -rf ~/virtctl
+# Install virtctl for VNC
+ARG virtctl_version="1.0.0"
+RUN curl -L "https://github.com/kubevirt/kubevirt/releases/download/v${virtctl_version}/virtctl-v${virtctl_version}-linux-amd64" -o /usr/local/bin/virtctl \
+    && chmod +x /usr/local/bin/virtctl
 
 # Activate root alias
 RUN source ~/.bashrc
@@ -60,10 +56,10 @@ RUN mkdir -p ~/.ssh/
 RUN mkdir -p /tmp/run_artifacts
 
 # download benchmark-operator to /tmp default path
-RUN git clone -b v1.0.1 https://github.com/cloud-bulldozer/benchmark-operator /tmp/benchmark-operator
+RUN git clone -b v1.0.2 https://github.com/cloud-bulldozer/benchmark-operator /tmp/benchmark-operator
 
 # download clusterbuster to /tmp default path && install cluster-buster dependency
-RUN git clone -b v1.1.7-kata-ci https://github.com/RobertKrawitz/OpenShift4-tools /tmp/OpenShift4-tools \
+RUN git clone -b v1.2.2-kata-ci https://github.com/RobertKrawitz/OpenShift4-tools /tmp/OpenShift4-tools \
     && dnf install -y hostname bc procps-ng
 
 # Add main

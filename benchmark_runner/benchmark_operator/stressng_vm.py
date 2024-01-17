@@ -9,11 +9,11 @@ from benchmark_runner.benchmark_operator.benchmark_operator_workloads_operations
 
 class StressngVM(BenchmarkOperatorWorkloadsOperations):
     """
-    This class for stressng vm workload
+    This class runs stressng vm workload
     """
     def __init__(self):
         """
-        All inherit from WorkloadsOperations
+        All inherit from BenchmarkOperatorWorkloadsOperations
         """
         super().__init__()
         self.__name = ''
@@ -25,10 +25,11 @@ class StressngVM(BenchmarkOperatorWorkloadsOperations):
     @logger_time_stamp
     def run(self):
         """
-        This method run stressng vm workload
+        This method runs stressng vm workload
         :return:
         """
         try:
+            self._prometheus_metrics_operation.init_prometheus()
             self.__name = self._workload
             if self._run_type == 'test_ci':
                 self.__es_index = 'stressng-test-ci-results'
@@ -43,6 +44,10 @@ class StressngVM(BenchmarkOperatorWorkloadsOperations):
             vm_name = self._create_vm_log(labels=[self.__workload_name])
             self.__status = self._oc.wait_for_vm_completed(workload=self.__workload_name, vm_name=vm_name)
             self.__status = 'complete' if self.__status else 'failed'
+            # prometheus queries
+            self._prometheus_metrics_operation.finalize_prometheus()
+            metric_results = self._prometheus_metrics_operation.run_prometheus_queries()
+            prometheus_result = self._prometheus_metrics_operation.parse_prometheus_metrics(data=metric_results)
             # system metrics
             if environment_variables.environment_variables_dict['system_metrics']:
                 self.system_metrics_collector(workload=self.__workload_name)
@@ -53,7 +58,7 @@ class StressngVM(BenchmarkOperatorWorkloadsOperations):
                 ids = self._verify_elasticsearch_data_uploaded(index=self.__es_index, uuid=self._oc.get_long_uuid(workload=self.__workload_name))
                 # update metadata
                 for id in ids:
-                    self._update_elasticsearch_index(index=self.__es_index, id=id, kind=self._environment_variables_dict.get('kind', ''), status=self.__status, run_artifacts_url=run_artifacts_url)
+                    self._update_elasticsearch_index(index=self.__es_index, id=id, kind=self._environment_variables_dict.get('kind', ''), status=self.__status, run_artifacts_url=run_artifacts_url, prometheus_result=prometheus_result)
             self._oc.delete_vm_sync(
                 yaml=os.path.join(f'{self._run_artifacts_path}', f'{self.__name}.yaml'),
                 vm_name=f'{self.__workload_name}-workload')

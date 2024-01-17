@@ -57,7 +57,7 @@ spec:
         resources:
           requests:
             cpu: 10m
-            memory: 10Mi
+            memory: 500Mi
           limits:
             cpu: 2
             memory: 4Gi
@@ -67,7 +67,7 @@ spec:
           persistentVolumeClaim:
             claimName: vdbench-pvc-claim
         - containerDisk:
-            image: quay.io/ebattat/centos-stream8-vdbench5.04.07-container-disk:latest
+            image: quay.io/ebattat/centos-stream8-container-disk:latest
           name: containerdisk
         - cloudInitNoCloud:
             userData: |-

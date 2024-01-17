@@ -1,0 +1,22 @@
+metadata:
+  name: bootstorm
+template_data:
+  shared:
+    pin_node: {{ pin_node1 }}
+    odf_pvc: {{ odf_pvc }}
+    uuid: {{ uuid }}
+    fedora_container_disk: quay.io/ebattat/fedora37-container-disk:latest
+  run_type:
+    perf_ci:
+      limits_memory: 512Mi
+      requests_memory: 512Mi
+    default:
+      limits_memory: 512Mi
+      requests_memory: 512Mi
+  kind:
+    vm:
+      run_type:
+        perf_ci:
+          sockets: 1
+        default:
+          sockets: 1

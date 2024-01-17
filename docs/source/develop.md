@@ -6,7 +6,7 @@ _**Table of Contents**_
 <!-- TOC -->
 - [Benchmark-runner: How to?](#benchmark-runner-how-to)
     - [Add any new Python code](#add-any-new-python-code)
-    - [Update workload, modify parameters to workload, or change parameters for any CI job](#add-new-workload-modify-parameters-to-workload-or-change-parameters-for-any-ci-job)
+    - [Run Benchmark runner from terminal](#run-benchmark-runner-from-terminal)
     - [Add new benchmark operator workload to benchmark runner](#add-new-benchmark-operator-workload-to-benchmark-runner)
     - [Add workload to grafana dashboard](#add-workload-to-grafana-dashboard)
         - [Data template](#data-template)
@@ -35,6 +35,12 @@ ls: cannot access 'tests/unittest/benchmark_runner/common/template_operations/__
 ```
 
 you need to create an empty file by that name and `git add` it.
+
+## Run Benchmark runner from terminal
+
+```
+PYTHONPATH=. python benchmark_runner/main/main.py
+```
 
 ## Add new workload, modify parameters to workload, or change parameters for any CI job
 
@@ -209,7 +215,7 @@ virtual environment:
         1. Need to configure all mandatory parameters in [benchmark_runner/main/environment_variables.py](benchmark_runner/main/environment_variables.py)
             1. `workloads` = e.g. stressng_pod
             2. `runner_path` = path to local cloned benchmark-operator (e.g. /home/user/)
-                1. git clone https://github.com/cloud-bulldozer/benchmark-operator  (inside 'runner_path')
+                1. git clone -b v1.0.2 https://github.com/cloud-bulldozer/benchmark-operator  (inside 'runner_path')
             3. `kubeadmin_password`
             4. `pin_node_benchmark_operator` - benchmark-operator node selector
             5. `pin_node1` - workload first node selector
@@ -221,7 +227,7 @@ virtual environment:
     2. Run workload through integration/unittest tests [using pytest]
         1. Need to configure all mandatory parameters [tests/integration/benchmark_runner/test_environment_variables.py](tests/integration/benchmark_runner/test_environment_variables.py)
             1. `runner_path` = path to local cloned benchmark-operator (e.g. /home/user/)
-                1. git clone https://github.com/cloud-bulldozer/benchmark-operator (inside 'runner_path')
+                1. git clone -b v1.0.2 https://github.com/cloud-bulldozer/benchmark-operator (inside 'runner_path')
             2. `kubeadmin_password`
             3. `pin_node1` - workload first node selector
             4. `elasticsearch` - elasticsearch url without http prefix

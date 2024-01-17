@@ -1,9 +1,4 @@
 
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: benchmark-runner
----
 ---
 apiVersion: v1
 kind: Pod
@@ -32,7 +27,7 @@ spec:
           memory: 4Gi
         limits:
           cpu: 2
-          memory: 32Gi
+          memory: 4Gi
       env:
         - name: BLOCK_SIZES
           value: "oltp1,oltp2,oltphw,odss2,odss128,4_cache,64_cache,4,64,4_cache,64_cache,4,64"
@@ -89,4 +84,3 @@ spec:
       storageClassName: ocs-storagecluster-ceph-rbd
     source:
       blank: {}
-
