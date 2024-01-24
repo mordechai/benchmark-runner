@@ -58,6 +58,8 @@ if workload and not ci_status:
             f'Invalid run type: {run_type} \n, choose one from the list: {environment_variables.run_types_list}')
     if is_clusterbuster_workload:
         clusterbuster_workload = ClusterBusterWorkloads()
+    if is_oadp_workload:
+        oadp_workload = OadpWorkloads()
     elif is_benchmark_operator_workload:
         benchmark_operator_workload = BenchmarkOperatorWorkloads()
     elif is_benchmark_runner_workload:
@@ -217,6 +219,8 @@ def main():
         success = run_benchmark_runner_workload()
     elif is_clusterbuster_workload:
         success = run_clusterbuster_workload()
+    elif is_oadp_workload:
+        success = run_oadp_workload()
     else:
         logger.error(f"empty workload, choose one from the list: {environment_variables.workloads_list}")
         raise SystemExit(SYSTEM_EXIT_UNKNOWN_EXECUTION_TYPE)
