@@ -37,8 +37,8 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'restore-csi-datagen-multi-ns-sanity-rbd' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
-        self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
+        self.__oadp_scenario_name = 'restore-csi-datagen-multi-ns-sanity-rbd' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
+        # self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
@@ -2806,6 +2806,22 @@ class OadpWorkloads(WorkloadsOperations):
             return True
 
     @logger_time_stamp
+    def invoke_log_collection(self, scenario):
+        """
+        method invokes misc-scripts/benchmark-runner-wrapper/log_collector.sh
+        required to pass crname from tests.yaml
+        """
+        # be able to invoke the log_colletor.sh
+        # pass him the cr name variable
+
+        log_collector_sh = (f"{self.__oadp_misc_dir}/benchmark-runner-wrapper/log_collector.sh")
+        cr_name = scenario['args']['OADP_CR_NAME']
+        logger.info(f"invoke_log_collection is attempting to collect logs from cr: {cr_name} and write logs to dir: {self._run_artifacts_path}")
+        # reminder need to also send the logs to the directory that benchmark-runner puts his results use --logs-folder
+        log_collection_output = self.__ssh.run(cmd=f"{log_collector_sh} {cr_name}")
+
+        # check that the files aren't empty
+    @logger_time_stamp
     def run_workload(self):
        """
        this method is for run workload of upstream code
@@ -2813,6 +2829,10 @@ class OadpWorkloads(WorkloadsOperations):
        # Load Scenario Details
        test_scenario = self.load_test_scenario()
        self.load_datasets_for_scenario(scenario=test_scenario)
+       self.invoke_log_collection(test_scenario)
+
+
+
 
        # # Verify no left over test results
        self.remove_previous_run_report()
