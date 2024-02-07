@@ -1,3 +1,0 @@
-busybox-perf-single-ns-100-pods
-busybox-perf-single-ns-100-pods
-busybox-perf-single-ns-100-pods

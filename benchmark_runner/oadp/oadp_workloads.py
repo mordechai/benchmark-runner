@@ -37,8 +37,8 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'restore-csi-datagen-multi-ns-sanity-rbd' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
-        self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
+        self.__oadp_scenario_name = 'restore-csi-busybox-perf-single-10-pods-rbd' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
+        # self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
@@ -2806,6 +2806,32 @@ class OadpWorkloads(WorkloadsOperations):
             return True
 
     @logger_time_stamp
+    def invoke_log_collection(self, scenario):
+        """
+        method invokes misc-scripts/benchmark-runner-wrapper/log_collector.sh
+        required to pass crname from tests.yaml
+        """
+
+        log_collector_sh = (f"{self.__oadp_misc_dir}/benchmark-runner-wrapper/log_collector.sh")
+        cr_name = scenario['args']['OADP_CR_NAME']
+        logger.info(f"invoke_log_collection is attempting to collect logs from cr: {cr_name} and write logs to dir: {self._run_artifacts_path}")
+        log_collection_output = self.__ssh.run(cmd=f"{log_collector_sh} {cr_name} --enable-collect-events --logs-folder {self._run_artifacts_path}")
+        logger.info(f"log_collection_output: {log_collection_output}")
+
+        logger.info(f"Getting the list of file names that exist in {self._run_artifacts_path} folder")
+        list_of_files = list(self.__ssh.run(cmd=f"find {self._run_artifacts_path} -type f").splitlines())
+        logger.info(f"{list_of_files}")
+
+        logger.info(f"Check if log_collector.sh executed")
+        if len(list_of_files) < 10:
+            logger.error(f"ERROR: log_collector.sh script wasn't running. Total files: {len(list_of_files)}")
+
+        logger.info(f"Check if file size is zero")
+        for i in range(len(list_of_files)):
+            if os.stat(list_of_files[i]).st_size == 0:
+              logger.error(f"ERROR: invoke_log_collection, The file size of: {list_of_files[i]} is 0 bytes")
+
+    @logger_time_stamp
     def run_workload(self):
        """
        this method is for run workload of upstream code
@@ -2914,7 +2940,8 @@ class OadpWorkloads(WorkloadsOperations):
        self.check_oadp_cr_for_errors_and_warns(scenario=test_scenario)
        self.get_oadp_velero_and_cr_log(cr_name=test_scenario['args']['OADP_CR_NAME'],
                                        cr_type=test_scenario['args']['OADP_CR_TYPE'])
-       self.get_logs_by_pod_ns(namespace=self.__test_env['velero_ns'])
+#       self.get_logs_by_pod_ns(namespace=self.__test_env['velero_ns'])
+       self.invoke_log_collection(test_scenario)
 
        # Post Run Validations
        #    check for pod restarts / cluster operator status
