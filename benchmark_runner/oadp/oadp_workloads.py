@@ -2822,15 +2822,14 @@ class OadpWorkloads(WorkloadsOperations):
         list_of_files = list(self.__ssh.run(cmd=f"find {self._run_artifacts_path} -type f").splitlines())
         logger.info(f"{list_of_files}")
 
-        logger.info(f"Getting the size of the files in {self._run_artifacts_path} folder")
-        list_of_files_size = []
-        for filename in list_of_files:
-            list_of_files_size.append(self.__ssh.run(cmd=f"stat -c %s {filename}"))
+        logger.info(f"Check if log_collector.sh executed")
+        if len(list_of_files) < 10:
+            logger.error(f"ERROR: log_collector.sh script wasn't running. Total files: {len(list_of_files)}")
 
         logger.info(f"Check if file size is zero")
-        for i in range(len(list_of_files_size)):
-            if list_of_files_size[i] == "0":
-                logger.info(f"The file size of: {list_of_files[i]} is {list_of_files_size[i]} bytes")
+        for i in range(len(list_of_files)):
+            if os.stat(list_of_files[i]).st_size == 0:
+              logger.error(f"ERROR: invoke_log_collection, The file size of: {list_of_files[i]} is 0 bytes")
 
     @logger_time_stamp
     def run_workload(self):
