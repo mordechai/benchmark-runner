@@ -37,7 +37,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        self.__oadp_scenario_name = 'restore-csi-busybox-perf-single-10-pods-rbd' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vsm-pvc-util-minio-6g'
+        self.__oadp_scenario_name = 'restore-10pod-vbd-pvc-util-0-0-6-cephrbd-6g' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vbd-pvc-util-minio-6g'
         # self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
@@ -677,7 +677,7 @@ class OadpWorkloads(WorkloadsOperations):
             vsc_cmd = self.__ssh.run(cmd=f"{self.__oadp_misc_dir}/vsc_clean.sh {target_namespace} {cr_type} {cr_name}")
         else:
             logger.info("::: INFO :: Attempting VSC Clean ALL vsc")
-            if scenario['args']['plugin'] != 'vsm':
+            if scenario['args']['plugin'] != 'vbd':
                 vsc_removal_all = """for i in `oc get vsc -A -o custom-columns=NAME:.metadata.name`; do echo $i; oc patch vsc $i -p '{"metadata":{"finalizers":null}}' --type=merge; done"""
             else:
                 vsc_removal_all = """oc delete vsb -A --all; oc delete vsr -A --all; oc delete vsc -A --all; oc delete vs -A --all; oc delete replicationsources.volsync.backube -A --all; oc delete replicationdestination.volsync.backube -A --all"""
@@ -1134,7 +1134,7 @@ class OadpWorkloads(WorkloadsOperations):
                 if backup_cmd.find('submitted successfully') == 0:
                     print("Error backup attempt failed !!! ")
                     logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
-            if plugin == 'vsm':
+            if plugin == 'vbd':
                 backup_cmd = self.__ssh.run(
                     cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --snapshot-move-data=true")
                 logger.info(f"### INFO ### OADP BACKUP executed with: oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --snapshot-move-data=true")
@@ -1164,7 +1164,7 @@ class OadpWorkloads(WorkloadsOperations):
                 if backup_cmd.find('submitted successfully') == 0:
                     print("Error backup attempt failed !!! ")
                     logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
-            if plugin == 'vsm':
+            if plugin == 'vbd':
                 backup_cmd = self.__ssh.run(
                     cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --data-mover 'velero' --snapshot-move-data=true -n {self.__test_env['velero_ns']}")
                 logger.info(f"### INFO ### UPSTREAM Velero backup executed with: cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero backup create {backup_name} --include-namespaces {namespaces_to_backup} --data-mover 'velero' --snapshot-move-data=true -n {self.__test_env['velero_ns']}")
@@ -1342,7 +1342,7 @@ class OadpWorkloads(WorkloadsOperations):
         velero_enabled_plugins = dpa_data['spec']['configuration']['velero']['defaultPlugins']
         is_csi_enabled = 'csi' in velero_enabled_plugins
         is_nodeagent_present = 'nodeAgent' in dpa_data['spec']['configuration']
-        if scenario['args']['plugin'] == 'csi' or  scenario['args']['plugin'] == 'vsm':
+        if scenario['args']['plugin'] == 'csi' or  scenario['args']['plugin'] == 'vbd':
             uploader_type = 'kopia'
         else:
             uploader_type = scenario['args']['plugin']
@@ -1366,7 +1366,7 @@ class OadpWorkloads(WorkloadsOperations):
         #     self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
         #                            patch_type='merge',
         #                            patch_json=query)
-        # if plugin == 'kopia' or plugin == 'vsm':
+        # if plugin == 'kopia' or plugin == 'vbd':
         #     query = '{"spec": {"configuration": {"nodeAgent": {"uploaderType": "kopia"}}}}'
         #     self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
         #                            patch_type='merge',
@@ -1481,8 +1481,8 @@ class OadpWorkloads(WorkloadsOperations):
     @logger_time_stamp
     def enable_datamover(self, oadp_namespace, scenario):
         """
-        # can handle sc and vsc defaults before this invoked.
-        method enables vsm / datamover
+        # can handle sc and vsm defaults before this invoked.
+        method enables vbd / datamover
         0) Get DPA values
         1) enable restic secret via oc apply -f yaml
         2) Set SC (in this case rbd per scenario details)
@@ -3023,7 +3023,7 @@ class OadpWorkloads(WorkloadsOperations):
         """
         expected_sc = test_scenario['dataset']['sc']
         if self.this_is_downstream():
-            if test_scenario['args']['plugin'] == 'vsm':
+            if test_scenario['args']['plugin'] == 'vbd':
                 if self.is_datamover_enabled(oadp_namespace=self.__test_env['velero_ns'], scenario=test_scenario) == False:
                     self.enable_datamover(oadp_namespace=self.__test_env['velero_ns'], scenario=test_scenario)
                     self.config_datamover(oadp_namespace=self.__test_env['velero_ns'], scenario=test_scenario)
