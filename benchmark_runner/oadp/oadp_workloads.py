@@ -1218,7 +1218,7 @@ class OadpWorkloads(WorkloadsOperations):
                 if state in ['Completed', 'Failed', 'PartiallyFailed', 'Deleted', 'FinalizingPartiallyFailed', 'WaitingForPluginOperationsPartiallyFailed' ]:
                     logger.info(f"::: INFO ::: wait_for_condition_of_oadp_cr: CR current status: of {cr_name} state: {state} in ['Completed', 'Failed', 'PartiallyFailed', 'FinalizingPartiallyFailed', 'WaitingForPluginOperationsPartiallyFailed']")
                     return True
-                if "couldn't get current server" in state or 'forbidden' in state:
+                if "couldn't get current server" in state or 'forbidden' in state or 'Unauthorized' in state:
                     logger.warning("### Warning ### Unauthorized error detected during CR poll wait_for_condition_of_cr issuing login attempt ")
                     logged_in = self.oc_log_in()
                     if not logged_in:
