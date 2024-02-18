@@ -1172,6 +1172,35 @@ class OadpWorkloads(WorkloadsOperations):
                     print("Error backup attempt failed !!! ")
                     logger.error(f"Error backup attempt failed stdout from command: {backup_cmd}")
 
+    def oc_log_in(self):
+        """
+        method attempts to log in to oc cluster
+        """
+        kubeconfig_path = f"/home/{os.getenv('USER')}/.kube/config"
+        kubeadmin_password_path = f"/home/{os.getenv('USER')}/clusterconfigs/auth/kubeadmin-password"
+        if not (os.path.exists(kubeconfig_path) and os.path.exists(kubeadmin_password_path)):
+            logger.error(f"## ERROR ## Attempting to log in to Openshift but {kubeconfig_path} or {kubeadmin_password_path} is not present")
+            raise FileNotFoundError("Kubeconfig file or kubeadmin password file not found.")
+            return False
+
+        oc_status = self.__ssh.run(
+            cmd=f"oc whoami")
+
+        if 'kube:admin' in oc_status:
+            logger.info ("### INFO ### You are already logged in with authenticated session")
+            return True
+
+        if 'kube:admin' not in oc_status:
+            logger.info("### INFO ### You are not currently logged into Openshift will now attempt log in")
+            login_attempt = self.__ssh.run(cmd=f"export KUBECONFIG={kubeconfig_path} && oc login -u kubeadmin -p $(cat {kubeadmin_password_path}) -n default")
+            if 'Login successful' not in login_attempt:
+                logger.error(f"## ERROR ## oc_log_in: Unable to log in to Openshift.")
+                return False
+            else:
+                logger.info("### INFO ### You are now logged in with authenticated session")
+                return True
+
+
     @logger_time_stamp
     def wait_for_condition_of_cr(self, cr_type, cr_name, testcase_timeout=43200):
         """
@@ -1189,6 +1218,23 @@ class OadpWorkloads(WorkloadsOperations):
                 if state in ['Completed', 'Failed', 'PartiallyFailed', 'Deleted', 'FinalizingPartiallyFailed', 'WaitingForPluginOperationsPartiallyFailed' ]:
                     logger.info(f"::: INFO ::: wait_for_condition_of_oadp_cr: CR current status: of {cr_name} state: {state} in ['Completed', 'Failed', 'PartiallyFailed', 'FinalizingPartiallyFailed', 'WaitingForPluginOperationsPartiallyFailed']")
                     return True
+                if "couldn't get current server" in state or 'forbidden' in state:
+                    logger.warning("### Warning ### Unauthorized error detected during CR poll wait_for_condition_of_cr issuing login attempt ")
+                    logged_in = self.oc_log_in()
+                    if not logged_in:
+                        logger.error(
+                            f':: ERROR :: wait_for_condition_of_oadp_cr: attempted to re-authenticate but failed and is returning ERROR in its current status: CR {cr_name} state: {state} that should not happen')
+                        return False
+                    else:
+                        logger.info(f"### INFO ### wait_for_condition_of_oadp_cr re-authenticated session successfully against the server log_in status: {logged_in}")
+                        state = self.__ssh.run(
+                            cmd=f"oc get {cr_type}/{cr_name} -n {self.__test_env['velero_ns']} -o jsonpath={jsonpath}")
+                        if state in ['Completed', 'Failed', 'PartiallyFailed', 'Deleted', 'FinalizingPartiallyFailed',
+                                     'WaitingForPluginOperationsPartiallyFailed']:
+                            logger.info(
+                                f"::: INFO ::: wait_for_condition_of_oadp_cr: CR current status: of {cr_name} state: {state} in ['Completed', 'Failed', 'PartiallyFailed', 'FinalizingPartiallyFailed', 'WaitingForPluginOperationsPartiallyFailed']")
+                            return True
+
                 if 'Error from server' in state:
                     logger.error( f':: ERROR :: wait_for_condition_of_oadp_cr: is returning ERROR in its current status: CR {cr_name} state: {state} that should not happen')
                     return False
