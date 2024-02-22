@@ -37,7 +37,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'restore-csi-busybox-perf-single-10-pods-rbd' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vbd-pvc-util-minio-6g'
+        #self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-10-pods-cephrbd' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vbd-pvc-util-minio-6g'
         self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
@@ -372,8 +372,10 @@ class OadpWorkloads(WorkloadsOperations):
         """
         retries = 0
         max_retries = 30
+        bsl_default_name = self.__ssh.run(
+            cmd=f"oc get bsl -n {self.__test_env['velero_ns']} | grep true | awk '{{print $1}}'")
         while retries < max_retries:
-            bsl_data = self.get_oc_resource_to_json(resource_type='bsl', resource_name='default',
+            bsl_data = self.get_oc_resource_to_json(resource_type='bsl', resource_name=bsl_default_name,
                                                     namespace=self.__test_env['velero_ns'])
             logger.info(f"### INFO ### verify_bsl_status: attempt {retries} of {max_retries} shows cmd_output {bsl_data}")
             if bool(bsl_data) == False:
