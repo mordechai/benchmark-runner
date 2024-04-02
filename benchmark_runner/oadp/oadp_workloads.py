@@ -29,7 +29,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_path = '/tmp/mpqe-scale-scripts/mtc-helpers/busybox'
         self.__oadp_base_dir = '/tmp/mpqe-scale-scripts/oadp-helpers'
         self.__oadp_misc_dir = '/tmp/mpqe-scale-scripts/misc-scripts'
-        self.__oadp_scenario_data = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/internal_data/tests.yaml'
+        self.__oadp_scenario_data = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/internal_data/tests_network.yaml'
         self.__oadp_promql_queries = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/metrics/metrics-oadp.yaml'
         # environment variables
         self.__namespace = self._environment_variables_dict.get('namespace', '')
@@ -37,8 +37,8 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        #self.__oadp_scenario_name = 'backup-csi-busybox-perf-single-10-pods-cephrbd' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vbd-pvc-util-minio-6g'
-        self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
+        self.__oadp_scenario_name = 'backup-1pod-kopia-pvc-util-0-0-4-cephrbd-6g' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vbd-pvc-util-minio-6g'
+        # self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
@@ -819,6 +819,9 @@ class OadpWorkloads(WorkloadsOperations):
                 logger.info(f"### INFO ### create_dataset completed adding pods of type {ds['role']} that created {ds['pods_per_ns']} pods in  ns {ns}  related info is {ds}")
 
 
+    def fail_flow(self, reason, ):
+        # method will assist with failing flow
+        logger.error("Run will be failed because of ")
     @logger_time_stamp
     def create_source_dataset(self, scenario, ds=None):
         """
@@ -843,7 +846,8 @@ class OadpWorkloads(WorkloadsOperations):
     @logger_time_stamp
     def wait_until_process_inside_pod_completes(self, pod_name, namespace, process_text_to_monitor, timeout_value):
         """
-        function will run rsh command and check for presence of running process and sleep until its not present or timeoutval exceeded
+        function will run rsh command and check for presence of running process related to a mount point
+        if found it returns true, other wise it continues to poll until the timeout_value has been exceeded.
         """
         try:
             self._oc.wait_for_pod_ready(pod_name=pod_name, namespace=namespace)
@@ -851,14 +855,15 @@ class OadpWorkloads(WorkloadsOperations):
             while current_wait_time <= int(timeout_value):
                 status_cmd = self.__ssh.run(cmd=f"oc  exec -n{namespace} {pod_name} -- /bin/bash -c 'pgrep -flc {process_text_to_monitor}'")
                 status_cmd_value = status_cmd.split('\n')[0]
-                logger.info(f':: INFO :: wait_until_process_inside_pod_completes: grep inside pod for {process_text_to_monitor} is returning value of {status_cmd} and status cmd value {status_cmd_value} amount of time left for this check is: {int(timeout_value) - current_wait_time}')
+                logger.info(f":: INFO :: wait_until_process_inside_pod_completes: executed: oc exec -n {namespace} {pod_name} -- /bin/bash -c 'pgrep -flc {process_text_to_monitor}' which returned {status_cmd_value}  a non zero value represents data population process still running, the check will continue to run for: {int(timeout_value) - current_wait_time}")
+                disk_capacity = self.__ssh.run(
+                    cmd=f"oc  exec -i -n{namespace} {pod_name} -- /bin/bash -c \"du -sh {process_text_to_monitor}\"")
                 if int(status_cmd_value) == 0:
-                    logger.info(':: INFO :: wait_until_process_inside_pod_completes: population related process is no longer found in container')
+                    logger.info(f':: INFO :: wait_until_process_inside_pod_completes: population related process is no longer found in container, the size of data on {process_text_to_monitor} is {disk_capacity}')
                     return True
                 else:
                     disk_capacity = self.__ssh.run(cmd=f"oc  exec -i -n{namespace} {pod_name} -- /bin/bash -c \"du -sh {process_text_to_monitor}\"")
-                    logger.info(f':: INFO :: wait_until_process_inside_pod_completes: population process is STILL running, current container utlized size for {process_text_to_monitor} is {disk_capacity}, returning value is:{status_cmd} remaing time: {int(timeout_value) - current_wait_time} ')
-                    logger.info(f':: INFO :: wait_until_process_inside_pod_completes: sleeping for 10s, before next poll for container size')
+                    logger.info(f':: INFO :: wait_until_process_inside_pod_completes: population process is STILL running, current container utlized size for {process_text_to_monitor} is {disk_capacity}, returning value is:{status_cmd} remaining time to poll: {int(timeout_value) - current_wait_time} ')
                     time.sleep(10)
                 current_wait_time += 10
         except Exception as err:
