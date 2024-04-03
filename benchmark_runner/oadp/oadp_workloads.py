@@ -1,5 +1,6 @@
 import inspect
 import logging
+import math
 import os
 import json
 import sys
@@ -11,7 +12,7 @@ import inspect
 import yaml
 import re
 from pathlib import Path
-
+from minio import Minio
 from benchmark_runner.common.ssh.ssh import SSH
 from benchmark_runner.oadp.oadp_exceptions import MissingResultReport, MissingElasticSearch, OadpError
 from benchmark_runner.common.logger.logger_time_stamp import logger_time_stamp, logger
@@ -249,6 +250,101 @@ class OadpWorkloads(WorkloadsOperations):
                     velero_details['velero']['commit'] = self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero; git rev-parse HEAD")
                 self.__run_metadata['summary']['env'].update(velero_details)
                 self.__result_dicts.append(self.__run_metadata['summary']['env'])
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
+    def get_s3_details_from_dpa(self):
+        # Get bucket name from dpa
+        try:
+
+            dpa_data = self.get_oc_resource_to_json(resource_type='dpa', resource_name=self.__oadp_dpa,
+                                                    namespace=self.__test_env['velero_ns'])
+            if bool(dpa_data) == False:
+                self.fail_test_run(
+                    f" Attempts to get bucket info from the dpa returned an empty dpa this occurred in " + self.get_current_function())
+            bucket_name_from_dpa = dpa_data['spec']['backupLocations'][0]['velero']['objectStorage']['bucket']
+            s3_url_from_dpa = dpa_data['spec']['backupLocations'][0]['velero']['config']['s3Url']
+            s3_url_from_dpa = s3_url_from_dpa.split('//')[-1]
+            minio_route_on_local_cluster_namespace = self.__ssh.run(
+                cmd='oc get route -n minio-bucket --field-selector metadata.name=minio --no-headers -o custom-columns=":spec.host"')
+            minio_deployed_locally = True if minio_route_on_local_cluster_namespace == s3_url_from_dpa else False
+            return minio_deployed_locally, s3_url_from_dpa, bucket_name_from_dpa
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
+
+
+    def minio_details(self, endpoint, access_key, secret_key, bucket_name, folder_prefix):
+
+        """Calculates total size of objects within a Minio bucket (optionally filtered by a folder prefix).
+
+        Args:
+            endpoint (str): The URL of your MinIO server (e.g., 'https://play.min.io:9000')
+            access_key (str): Your MinIO access key.
+            secret_key (str): Your MinIO secret key.
+            bucket_name (str): The name of the MinIO bucket.
+            folder_prefix (str): Optional prefix to filter objects within a "folder".
+
+        Updates Json with:
+            minio_deployed_locally
+            endpoint
+            bucket_name
+            bucket_creation_date
+            total_objs_in_bucket
+            total_bucket_size
+            bucket_utilization_in_bytes
+
+
+        Returns:
+            tuple: (total_size, bucket_size_available)
+                total_size: Total size of objects in bytes.
+                bucket_size_available: Currently unknown. MinIO doesn't easily provide the total bucket quota unless explicitly set.
+        """
+
+        total_size = 0
+
+        try:
+            minio_deployed_locally, endpoint, bucket_name = self.get_s3_details_from_dpa()
+            # Initialize MinIO client
+            client = Minio(
+                endpoint,
+                access_key=access_key,
+                secret_key=secret_key,
+                secure=False  # Adjust 'secure' based on your MinIO setup (use 'secure=True' for HTTPS)
+            )
+
+            total_buckets_on_minio = len(client.list_buckets())
+            total_objs_in_bucket = 0
+            bucket_creation_date = ''
+            for bucket in client.list_buckets():
+                if bucket.name == bucket_name:
+                    bucket_creation_date = bucket.creation_date
+
+            # Iterate over objects in the bucket (and optionally filter by prefix)
+            objects = client.list_objects(bucket_name, prefix=folder_prefix, recursive=True)
+
+            logger.info("### INFO ### minio_details: is about to count objects in the minio bucket this make take a few minutes")
+            for obj in objects:
+                total_size += obj.size
+                total_objs_in_bucket += 1
+            # Note: MinIO doesn't provide a straightforward way to get bucket size limits unless
+            # explicitly configured.
+            # bucket_size_available = "Unknown"
+            # if total_size == 0:
+            #     return "0B"
+            # size_name = ("B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB")
+            # i = int(math.floor(math.log(total_size, 1024)))
+            # p = math.pow(1024, i)
+            # s = round(total_size / p, 2)
+            # human_readable_size = "%s %s" % (s, size_name[i])
+            minio_pvc = self.get_oc_resource_to_json(resource_type='pvc', resource_name='minio-pvc', namespace='minio-bucket')
+            if minio_deployed_locally and bool(minio_pvc) == False:
+                self.fail_test_run(
+                    f" Attempts to get bucket's pvc size details from local cluster returned empty for namespace='minio-bucket' this occurred in " + self.get_current_function())
+            # return total_size, human_readable_size
+            minio_pvc_capacity = minio_pvc['spec']['resources']['requests']['storage']
+
+
         except Exception as err:
             self.fail_test_run(f" {err} occurred in " + self.get_current_function())
             raise err
@@ -2957,6 +3053,16 @@ class OadpWorkloads(WorkloadsOperations):
        # Load Scenario Details
        test_scenario = self.load_test_scenario()
        self.load_datasets_for_scenario(scenario=test_scenario)
+
+       endpoint = "minio-minio-bucket.apps.vlan603.rdu2.scalelab.redhat.com"
+       access_key = "minio"
+       secret_key = "minio123"
+       bucket_name = "minio-oadp-bucket"
+       folder_prefix = "velero"
+
+       total_size, bucket_size_available = self.minio_details(
+           endpoint, access_key, secret_key, bucket_name, folder_prefix
+       )
 
        # # Verify no left over test results
        self.remove_previous_run_report()
