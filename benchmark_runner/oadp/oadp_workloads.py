@@ -186,28 +186,33 @@ class OadpWorkloads(WorkloadsOperations):
         """
         method gets ceph version
         """
-        storage_details = {}
-        get_sc_cmd = self.__ssh.run(cmd="oc get sc --no-headers | awk '{print $1}'")
-        if len(get_sc_cmd.splitlines()) > 0:
-            storage_details['storage_class'] = get_sc_cmd.splitlines()
-        ceph_pod = self.__ssh.run(cmd=f'oc get pods -n openshift-storage --field-selector status.phase=Running --no-headers -o custom-columns=":metadata.name" | grep tools')
-        if ceph_pod != '':
-            ceph_version_cmd = self.__ssh.run(cmd=f'oc -n openshift-storage rsh {ceph_pod} ceph version')
-            if ceph_version_cmd.split('ceph version ')[1] != '':
-                storage_details['ceph'] = ceph_version_cmd.split('ceph version ')[1]
-                # self.__run_metadata['summary'].update(storage_details)
-        # storage info
-        default_storage_class = self.get_default_storage_class()
-        storage_details['default_storage_class'] = default_storage_class
-        openshift_storage_version_cmd = self.__ssh.run(
-            cmd=f"oc -n openshift-storage get csv -o yaml | grep full_version | tail -n 1")
-        openshift_storage_version = openshift_storage_version_cmd.split('full_version: ')[1]
-        storage_details['openshift_storage_version'] = openshift_storage_version
-        self.__result_dicts.append(storage_details)
-        self.__run_metadata['summary']['env']['storage'].update(storage_details)
-        self.__result_dicts.append(self.__run_metadata['summary']['env']['storage'])
-        self.get_noobaa_version_details()
-        #TODO: handle minio get version details inplace of mcg
+        try:
+
+            storage_details = {}
+            get_sc_cmd = self.__ssh.run(cmd="oc get sc --no-headers | awk '{print $1}'")
+            if len(get_sc_cmd.splitlines()) > 0:
+                storage_details['storage_class'] = get_sc_cmd.splitlines()
+            ceph_pod = self.__ssh.run(cmd=f'oc get pods -n openshift-storage --field-selector status.phase=Running --no-headers -o custom-columns=":metadata.name" | grep tools')
+            if ceph_pod != '':
+                ceph_version_cmd = self.__ssh.run(cmd=f'oc -n openshift-storage rsh {ceph_pod} ceph version')
+                if ceph_version_cmd.split('ceph version ')[1] != '':
+                    storage_details['ceph'] = ceph_version_cmd.split('ceph version ')[1]
+                    # self.__run_metadata['summary'].update(storage_details)
+            # storage info
+            default_storage_class = self.get_default_storage_class()
+            storage_details['default_storage_class'] = default_storage_class
+            openshift_storage_version_cmd = self.__ssh.run(
+                cmd=f"oc -n openshift-storage get csv -o yaml | grep full_version | tail -n 1")
+            openshift_storage_version = openshift_storage_version_cmd.split('full_version: ')[1]
+            storage_details['openshift_storage_version'] = openshift_storage_version
+            self.__result_dicts.append(storage_details)
+            self.__run_metadata['summary']['env']['storage'].update(storage_details)
+            self.__result_dicts.append(self.__run_metadata['summary']['env']['storage'])
+            self.get_noobaa_version_details()
+            #TODO: handle minio get version details inplace of mcg
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
     @logger_time_stamp
     def get_velero_details(self):
