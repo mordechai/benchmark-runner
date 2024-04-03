@@ -1,11 +1,13 @@
+import inspect
 import logging
 import os
 import json
+import sys
 import time
 import random
 import string
-
-
+import traceback
+import inspect
 import yaml
 import re
 from pathlib import Path
@@ -128,6 +130,19 @@ class OadpWorkloads(WorkloadsOperations):
                     f'performing oc logs {p} -n {namespace} redirected to {output_filename} ')
                 self.__ssh.run(cmd=f'oc logs {p} -n {namespace} > {output_filename}')
 
+    def get_current_function(self):
+        """
+        func returns name of current func
+        """
+
+        # Get the frame of the caller
+        caller_frame = inspect.currentframe().f_back
+
+        # Get the name of the function from the frame
+        function_name = inspect.getframeinfo(caller_frame).function
+
+        # Log the name of the function
+        return f" function executing: {function_name}"
 
     @logger_time_stamp
     def delete_all(self):
@@ -199,35 +214,39 @@ class OadpWorkloads(WorkloadsOperations):
         """
         method gets oadp relevant pod details
         """
+        try:
 
-        velero_pod_name = self.__ssh.run(
-            cmd=f"oc get pods -n {self.__test_env['velero_ns']} --field-selector status.phase=Running --no-headers -o custom-columns=':metadata.name' | grep velero")
-        if velero_pod_name != '':
-            get_velero_pod_details = self.__ssh.run(cmd=f"oc get pods {velero_pod_name} -n {self.__test_env['velero_ns']} -o json")
-            data = json.loads(get_velero_pod_details)
-            velero_details = {
-                "velero": {}
-            }
-            velero_pod_on_worker = data['spec']['nodeName']
-            for container in data['spec']['containers']:
-                velero_details['velero']['name'] = container['name']
-                velero_details['velero']['args'] = container['args']
-                velero_details['velero']['image'] = container['image']
-                velero_details['velero']['resources'] = container['resources']
-            if self.__test_env['source'] == 'downstream':
-                get_velero_version = self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero version | grep Version: | tail -n -1")
-                velero_version = get_velero_version.split('Version:')[1]
-                if velero_version != '':
-                    velero_details['velero']['velero_version'] = velero_version
-            if self.__test_env['source'] == 'upstream':
-                # get_velero_version = self.__ssh.run(
-                #     cmd=f"{self.__test_env['velero_cli_path']}/velero/cmd/velero/velero version")
-                get_velero_branch = self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero; git branch")
-                velero_details['velero']['version'] = get_velero_branch.split('*')[-1].strip().replace('release-', '')
-                velero_details['velero']['branch'] = get_velero_branch.split('*')[-1].strip()
-                velero_details['velero']['commit'] = self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero; git rev-parse HEAD")
-            self.__run_metadata['summary']['env'].update(velero_details)
-            self.__result_dicts.append(self.__run_metadata['summary']['env'])
+            velero_pod_name = self.__ssh.run(
+                cmd=f"oc get pods -n {self.__test_env['velero_ns']} --field-selector status.phase=Running --no-headers -o custom-columns=':metadata.name' | grep velero")
+            if velero_pod_name != '':
+                get_velero_pod_details = self.__ssh.run(cmd=f"oc get pods {velero_pod_name} -n {self.__test_env['velero_ns']} -o json")
+                data = json.loads(get_velero_pod_details)
+                velero_details = {
+                    "velero": {}
+                }
+                velero_pod_on_worker = data['spec']['nodeName']
+                for container in data['spec']['containers']:
+                    velero_details['velero']['name'] = container['name']
+                    velero_details['velero']['args'] = container['args']
+                    velero_details['velero']['image'] = container['image']
+                    velero_details['velero']['resources'] = container['resources']
+                if self.__test_env['source'] == 'downstream':
+                    get_velero_version = self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero version | grep Version: | tail -n -1")
+                    velero_version = get_velero_version.split('Version:')[1]
+                    if velero_version != '':
+                        velero_details['velero']['velero_version'] = velero_version
+                if self.__test_env['source'] == 'upstream':
+                    # get_velero_version = self.__ssh.run(
+                    #     cmd=f"{self.__test_env['velero_cli_path']}/velero/cmd/velero/velero version")
+                    get_velero_branch = self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero; git branch")
+                    velero_details['velero']['version'] = get_velero_branch.split('*')[-1].strip().replace('release-', '')
+                    velero_details['velero']['branch'] = get_velero_branch.split('*')[-1].strip()
+                    velero_details['velero']['commit'] = self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero; git rev-parse HEAD")
+                self.__run_metadata['summary']['env'].update(velero_details)
+                self.__result_dicts.append(self.__run_metadata['summary']['env'])
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
     @logger_time_stamp
     def get_noobaa_version_details(self):
@@ -1815,33 +1834,38 @@ class OadpWorkloads(WorkloadsOperations):
         """
         Get OCP / worker details
         """
-        cluster_details = {
-            "oadp": {}
-        }
-        jsonpath_cluster_name = "'{print $2}'"
-        cluster_name = self.__ssh.run(
-            cmd=f"oc get route/console -n openshift-console | grep -v NAME | awk {jsonpath_cluster_name}")
-        if cluster_name != '':
-            self.__run_metadata['summary']['env']['ocp']['cluster'] = cluster_name
+        try:
 
-        get_ocp_version_cmd = self.__ssh.run(cmd=f"oc version | grep 'Server Version'")
-        ocp_version = get_ocp_version_cmd.split('Version:')[1]
-        if ocp_version != '':
-            self.__run_metadata['summary']['env']['ocp']['version'] = ocp_version
+            cluster_details = {
+                "oadp": {}
+            }
+            jsonpath_cluster_name = "'{print $2}'"
+            cluster_name = self.__ssh.run(
+                cmd=f"oc get route/console -n openshift-console | grep -v NAME | awk {jsonpath_cluster_name}")
+            if cluster_name != '':
+                self.__run_metadata['summary']['env']['ocp']['cluster'] = cluster_name
 
-        # get number of masters
-        get_masters_cmd = self.__ssh.run(
-            cmd="""oc get nodes -l node-role.kubernetes.io/master -o jsonpath='{.items[*].metadata.name}'""")
-        num_of_masters = len(get_masters_cmd.split(' '))
-        if num_of_masters != '':
-            self.__run_metadata['summary']['env']['ocp']['num_of_masters'] = num_of_masters
+            get_ocp_version_cmd = self.__ssh.run(cmd=f"oc version | grep 'Server Version'")
+            ocp_version = get_ocp_version_cmd.split('Version:')[1]
+            if ocp_version != '':
+                self.__run_metadata['summary']['env']['ocp']['version'] = ocp_version
 
-        get_workers_cmd = self.__ssh.run(
-            cmd="""oc get nodes -l node-role.kubernetes.io/worker -o jsonpath='{.items[*].metadata.name}'""")
-        num_of_workers = len(get_workers_cmd.split(' '))
-        if num_of_workers != '':
-            self.__run_metadata['summary']['env']['ocp']['num_of_workers'] = num_of_workers
+            # get number of masters
+            get_masters_cmd = self.__ssh.run(
+                cmd="""oc get nodes -l node-role.kubernetes.io/master -o jsonpath='{.items[*].metadata.name}'""")
+            num_of_masters = len(get_masters_cmd.split(' '))
+            if num_of_masters != '':
+                self.__run_metadata['summary']['env']['ocp']['num_of_masters'] = num_of_masters
 
+            get_workers_cmd = self.__ssh.run(
+                cmd="""oc get nodes -l node-role.kubernetes.io/worker -o jsonpath='{.items[*].metadata.name}'""")
+            num_of_workers = len(get_workers_cmd.split(' '))
+            if num_of_workers != '':
+                self.__run_metadata['summary']['env']['ocp']['num_of_workers'] = num_of_workers
+
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
     @logger_time_stamp
     def delete_oadp_custom_resources(self, ns, cr_type, cr_name):
@@ -1928,6 +1952,7 @@ class OadpWorkloads(WorkloadsOperations):
                 logger.error('Yaml for test scenarios is not found or empty!!')
                 logger.error('Test Scenario index is not found')
                 logger.exception(f'Test Scenario {self.__oadp_scenario_name} index is not found')
+                self.fail_test_run(f"Test Scenario {self.__oadp_scenario_name} index is not found occurred in " + self.get_current_function())
         except OadpError as err:
             raise OadpError(err)
         except Exception as err:
@@ -2481,60 +2506,69 @@ class OadpWorkloads(WorkloadsOperations):
     @logger_time_stamp
     def load_datasets_for_scenario(self, scenario):
         # Extract information from the scenario and add to scenario_datasets
-        all_datasets = []
 
-        # Check if 'dataset' is a list of dictionaries
-        if isinstance(scenario['dataset'], list):
-            # Iterate through each dataset in the list
-            for dataset in scenario['dataset']:
-                # Extract 'namespace' from the dataset or provide an empty string if not present
-                namespace = dataset.get('namespace', "")
+        try:
 
-                # Check if the namespace already exists in the list_of_datasets_which_belong_to_this_namespace
-                existing_namespace_index = next((i for i, s in enumerate(all_datasets) if s['namespace'] == namespace),
-                                                None)
+            all_datasets = []
 
-                if existing_namespace_index is not None:
-                    # Update existing entry in all_datasets
-                    existing_entry = all_datasets[existing_namespace_index]
-                    existing_entry['total_datasets_for_this_namespace'] += 1
-                    existing_entry['total_pods_per_all_datasets_with_same_namespace'] += dataset['pods_per_ns']
-                    existing_entry['list_of_datasets_which_belong_to_this_namespace'].append(
-                        self._process_dataset(dataset, namespace))
-                else:
-                    # Add a new entry to all_datasets
-                    summary = {
-                        'namespace': namespace,
-                        'total_datasets_for_this_namespace': 1,
-                        'total_pods_per_all_datasets_with_same_namespace': dataset['pods_per_ns'],
-                        'list_of_datasets_which_belong_to_this_namespace': [self._process_dataset(dataset, namespace)],
-                        'all_ds_exists': False,
-                        'all_ds_validated': False
-                    }
-                    all_datasets.append(summary)
-        elif isinstance(scenario['dataset'], dict):
-            # Scenario where dataset is a single dictionary
-            namespace = scenario['args'].get('namespaces_to_backup', "")
-            summary = {
-                'namespace': namespace,
-                'total_datasets_for_this_namespace': 1,
-                'total_pods_per_all_datasets_with_same_namespace': scenario['dataset']['pods_per_ns'],
-                'list_of_datasets_which_belong_to_this_namespace': [self._process_dataset(dataset=scenario['dataset'], namespace=namespace)],
-                'all_ds_exists': False,
-                'all_ds_validated': False
-            }
-            all_datasets.append(summary)
+            # Check if 'dataset' is a list of dictionaries
+            if isinstance(scenario['dataset'], list):
+                # Iterate through each dataset in the list
+                for dataset in scenario['dataset']:
+                    # Extract 'namespace' from the dataset or provide an empty string if not present
+                    namespace = dataset.get('namespace', "")
 
-        # Check if all datasets in the scenario have 'exists' and 'validated' as True
-        exists = all(all(ds['exists'] for ds in dataset['list_of_datasets_which_belong_to_this_namespace']) for dataset in all_datasets)
-        validated = all(all(ds['validated'] for ds in dataset['list_of_datasets_which_belong_to_this_namespace']) for dataset in all_datasets)
+                    # Check if the namespace already exists in the list_of_datasets_which_belong_to_this_namespace
+                    existing_namespace_index = next((i for i, s in enumerate(all_datasets) if s['namespace'] == namespace),
+                                                    None)
 
-        # Check if the namespace already exists in scenario_datasets
-        existing_namespace_index = next((i for i, s in enumerate(self.__scenario_datasets)
-                                         if s['namespace'] == namespace), None)
+                    if existing_namespace_index is not None:
+                        # Update existing entry in all_datasets
+                        existing_entry = all_datasets[existing_namespace_index]
+                        existing_entry['total_datasets_for_this_namespace'] += 1
+                        existing_entry['total_pods_per_all_datasets_with_same_namespace'] += dataset['pods_per_ns']
+                        existing_entry['list_of_datasets_which_belong_to_this_namespace'].append(
+                            self._process_dataset(dataset, namespace))
+                    else:
+                        # Add a new entry to all_datasets
+                        summary = {
+                            'namespace': namespace,
+                            'total_datasets_for_this_namespace': 1,
+                            'total_pods_per_all_datasets_with_same_namespace': dataset['pods_per_ns'],
+                            'list_of_datasets_which_belong_to_this_namespace': [self._process_dataset(dataset, namespace)],
+                            'all_ds_exists': False,
+                            'all_ds_validated': False
+                        }
+                        all_datasets.append(summary)
+            elif isinstance(scenario['dataset'], dict):
+                # Scenario where dataset is a single dictionary
+                namespace = scenario['args'].get('namespaces_to_backup', "")
+                summary = {
+                    'namespace': namespace,
+                    'total_datasets_for_this_namespace': 1,
+                    'total_pods_per_all_datasets_with_same_namespace': scenario['dataset']['pods_per_ns'],
+                    'list_of_datasets_which_belong_to_this_namespace': [self._process_dataset(dataset=scenario['dataset'], namespace=namespace)],
+                    'all_ds_exists': False,
+                    'all_ds_validated': False
+                }
+                all_datasets.append(summary)
 
-        self.__scenario_datasets = all_datasets
-        self.print_all_ds(scenario)
+                # Check if all datasets in the scenario have 'exists' and 'validated' as True
+                exists = all(all(ds['exists'] for ds in dataset['list_of_datasets_which_belong_to_this_namespace']) for dataset in all_datasets)
+                validated = all(all(ds['validated'] for ds in dataset['list_of_datasets_which_belong_to_this_namespace']) for dataset in all_datasets)
+
+                # Check if the namespace already exists in scenario_datasets
+                existing_namespace_index = next((i for i, s in enumerate(self.__scenario_datasets)
+                                                 if s['namespace'] == namespace), None)
+
+                self.__scenario_datasets = all_datasets
+                self.print_all_ds(scenario)
+        except Exception as err:
+
+            self.fail_test_run(
+                f"Exception {err} occurred in " + self.get_current_function())
+            raise err
+
 
     def ds_get_datasets_for_namespace(self, namespace):
         # Return list_of_datasets_which_belong_to_this_namespace for the specified namespace
@@ -2827,13 +2861,19 @@ class OadpWorkloads(WorkloadsOperations):
         method checks for previous report
         if it exists it removes it
         """
-        if os.path.exists(os.path.join(self.__result_report)):
-            logger.warning(f"### WARN ### existing file related to OADP Report found at {self.__result_report} this maybe a left over test result ")
-            os.remove(path=self.__result_report)
-            logger.info(f"### INFO ### OADP Report at {self.__result_report} was removed")
-            return True
-        else:
-            logger.info(f"### INFO ### Checks for left over OADP Reports were successful no left overs found at {self.__result_report} ")
+        try:
+
+            if os.path.exists(os.path.join(self.__result_report)):
+                logger.warning(f"### WARN ### existing file related to OADP Report found at {self.__result_report} this maybe a left over test result ")
+                os.remove(path=self.__result_report)
+                logger.info(f"### INFO ### OADP Report at {self.__result_report} was removed")
+                return True
+            else:
+                logger.info(f"### INFO ### Checks for left over OADP Reports were successful no left overs found at {self.__result_report} ")
+        except Exception as err:
+            self.fail_test_run(f" {err} index is not found occurred in " + self.get_current_function())
+            raise err
+
 
     @logger_time_stamp
     def set_velero_stream_source(self):
@@ -2841,15 +2881,35 @@ class OadpWorkloads(WorkloadsOperations):
         method to detect whether its downstream or upstream velero
         by checking for oadp named pod
         """
-        logger.info(f"### INFO ### set_velero_stream_source: Namespace to inspect for upstream/downstream:  {self.__test_env['velero_ns']}")
-        check_for_oadp_pod_presence = self.__ssh.run(cmd=f"oc get pods -n {self.__test_env['velero_ns']} --field-selector status.phase=Running --no-headers -o custom-columns=':metadata.name' | grep -c 'openshift-adp-controller-manager'")
-        if check_for_oadp_pod_presence != '1':
-            self.__test_env['source'] = 'upstream'
-            logger.info(f":: INFO :: Velero namespace  {self.__test_env['velero_ns']} is upstream")
-        else:
-            self.__test_env['source'] = 'downstream'
-            logger.info(f":: INFO :: Velero namespace {self.__test_env['velero_ns']} is downstream")
+        try:
+            logger.info(f"### INFO ### set_velero_stream_source: Namespace to inspect for upstream/downstream:  {self.__test_env['velero_ns']}")
+            check_for_oadp_pod_presence = self.__ssh.run(cmd=f"oc get pods -n {self.__test_env['velero_ns']} --field-selector status.phase=Running --no-headers -o custom-columns=':metadata.name' | grep -c 'openshift-adp-controller-manager'")
+            if check_for_oadp_pod_presence != '1':
+                self.__test_env['source'] = 'upstream'
+                logger.info(f":: INFO :: Velero namespace  {self.__test_env['velero_ns']} is upstream")
+            else:
+                self.__test_env['source'] = 'downstream'
+                logger.info(f":: INFO :: Velero namespace {self.__test_env['velero_ns']} is downstream")
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
+    def fail_test_run(self, msg):
+        """
+        method will handle failing the flow updating logging to show failure
+        """
+        try:
+            raise RuntimeError(msg)
+        except Exception as e:
+            # Get the traceback information
+            traceback_info = traceback.extract_stack()[:-2]  # Exclude the current function
+            # Extract the method name that raised the exception
+            method_name = traceback_info[-1].name
+            # Print the exception, method name, and custom message
+            print(f"Exception: {e}\nMethod: {method_name}\nMessage: {msg}")
+            # Reraise the exception to halt the execution
+            raise
+        # sys.exit(f'{msg}')
     @logger_time_stamp
     def this_is_downstream(self):
         """
