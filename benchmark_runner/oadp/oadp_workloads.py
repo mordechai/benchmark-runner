@@ -59,6 +59,10 @@ class OadpWorkloads(WorkloadsOperations):
         self.__ssh = SSH()
         self.__oadp_resources = {}
         self.__oadp_runtime_resource_mapping = {}
+        self.__oadp_minio_bucket = {
+            'access_key': 'minio',
+            'secret_key': 'minio123'
+        }
         self.__oadp_dpa = 'example-velero'
         self.__test_env = {
             'source': 'upstream',
@@ -209,8 +213,6 @@ class OadpWorkloads(WorkloadsOperations):
             self.__result_dicts.append(storage_details)
             self.__run_metadata['summary']['env']['storage'].update(storage_details)
             self.__result_dicts.append(self.__run_metadata['summary']['env']['storage'])
-            self.get_noobaa_version_details()
-            #TODO: handle minio get version details inplace of mcg
         except Exception as err:
             self.fail_test_run(f" {err} occurred in " + self.get_current_function())
             raise err
@@ -274,7 +276,8 @@ class OadpWorkloads(WorkloadsOperations):
             raise err
 
 
-    def minio_details(self, endpoint, access_key, secret_key, bucket_name, folder_prefix):
+
+    def get_bucket_details(self, folder_prefix):
 
         """Calculates total size of objects within a Minio bucket (optionally filtered by a folder prefix).
 
@@ -302,14 +305,26 @@ class OadpWorkloads(WorkloadsOperations):
         """
 
         total_size = 0
-
+        bucket_details = {
+            "bucket": {
+                'minio_deployed_locally': '',
+                'endpoint': '',
+                'bucket_name': '',
+                'bucket_creation_date': '',
+                'total_bucket_size': '',
+                'bucket_utilization_in_bytes': '',
+                'bucket_capacity_in_bytes': ''
+            }
+        }
         try:
+
             minio_deployed_locally, endpoint, bucket_name = self.get_s3_details_from_dpa()
+
             # Initialize MinIO client
             client = Minio(
                 endpoint,
-                access_key=access_key,
-                secret_key=secret_key,
+                access_key=self.__oadp_minio_bucket['access_key'],
+                secret_key=self.__oadp_minio_bucket['secret_key'],
                 secure=False  # Adjust 'secure' based on your MinIO setup (use 'secure=True' for HTTPS)
             )
 
@@ -318,7 +333,7 @@ class OadpWorkloads(WorkloadsOperations):
             bucket_creation_date = ''
             for bucket in client.list_buckets():
                 if bucket.name == bucket_name:
-                    bucket_creation_date = bucket.creation_date
+                    bucket_details['bucket']['bucket_creation_date'] = bucket.creation_date
 
             # Iterate over objects in the bucket (and optionally filter by prefix)
             objects = client.list_objects(bucket_name, prefix=folder_prefix, recursive=True)
@@ -327,23 +342,52 @@ class OadpWorkloads(WorkloadsOperations):
             for obj in objects:
                 total_size += obj.size
                 total_objs_in_bucket += 1
+
+            if minio_deployed_locally !='':
+                bucket_details['bucket']['minio_deployed_locally'] = minio_deployed_locally
+
+            if endpoint !='':
+                bucket_details['bucket']['endpoint'] = endpoint
+
+            if bucket_name !='':
+                bucket_details['bucket']['bucket_name'] = bucket_name
+
+            if bucket_creation_date !='':
+                bucket_details['bucket']['creation_date'] = bucket_creation_date
+
+            if total_objs_in_bucket !='':
+                bucket_details['bucket']['total_objs_in_bucket_before'] = total_objs_in_bucket
+
+            if total_size !='':
+                bucket_details['bucket']['total_bytes_in_bucket_before'] = total_size
+
             # Note: MinIO doesn't provide a straightforward way to get bucket size limits unless
             # explicitly configured.
             # bucket_size_available = "Unknown"
-            # if total_size == 0:
-            #     return "0B"
-            # size_name = ("B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB")
-            # i = int(math.floor(math.log(total_size, 1024)))
-            # p = math.pow(1024, i)
-            # s = round(total_size / p, 2)
-            # human_readable_size = "%s %s" % (s, size_name[i])
-            minio_pvc = self.get_oc_resource_to_json(resource_type='pvc', resource_name='minio-pvc', namespace='minio-bucket')
-            if minio_deployed_locally and bool(minio_pvc) == False:
-                self.fail_test_run(
-                    f" Attempts to get bucket's pvc size details from local cluster returned empty for namespace='minio-bucket' this occurred in " + self.get_current_function())
-            # return total_size, human_readable_size
-            minio_pvc_capacity = minio_pvc['spec']['resources']['requests']['storage']
+            if total_size == 0:
+                total_size = "0B"
+            size_name = ("B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB")
+            i = int(math.floor(math.log(total_size, 1024)))
+            p = math.pow(1024, i)
+            s = round(total_size / p, 2)
+            bucket_utilization = "%s %s" % (s, size_name[i])
 
+            if minio_deployed_locally:
+                # Get pvc details of minio deployment
+                minio_pvc = self.get_oc_resource_to_json(resource_type='pvc', resource_name='minio-pvc', namespace='minio-bucket')
+                # fail if it empty
+                if bool(minio_pvc) == False:
+                    self.fail_test_run(f" Attempts to get bucket's pvc size details from local cluster returned empty for namespace='minio-bucket' this occurred in " + self.get_current_function())
+                else:
+                    # Get bucket capacity in bytes
+                    minio_pvc_capacity = minio_pvc['spec']['resources']['requests']['storage']
+                    bucket_capacity_in_bytes = self.capacity_in_bytes(minio_pvc_capacity)
+                    if bucket_capacity_in_bytes !=  '':
+                        bucket_details['bucket']['bucket_capacity_in_bytes'] = bucket_capacity_in_bytes
+                        logger.info(f" Minio bucket contains {bucket_utilization} of objs, total bucket capacity is {minio_pvc_capacity}")
+                    # return total_size, human_readable_size
+                    bucket_details['bucket']['total_bucket_size'] = minio_pvc['spec']['resources']['requests']['storage']
+            self.__run_metadata['summary']['env']['storage'].update(bucket_details)
 
         except Exception as err:
             self.fail_test_run(f" {err} occurred in " + self.get_current_function())
@@ -3054,16 +3098,6 @@ class OadpWorkloads(WorkloadsOperations):
        test_scenario = self.load_test_scenario()
        self.load_datasets_for_scenario(scenario=test_scenario)
 
-       endpoint = "minio-minio-bucket.apps.vlan603.rdu2.scalelab.redhat.com"
-       access_key = "minio"
-       secret_key = "minio123"
-       bucket_name = "minio-oadp-bucket"
-       folder_prefix = "velero"
-
-       total_size, bucket_size_available = self.minio_details(
-           endpoint, access_key, secret_key, bucket_name, folder_prefix
-       )
-
        # # Verify no left over test results
        self.remove_previous_run_report()
 
@@ -3074,6 +3108,7 @@ class OadpWorkloads(WorkloadsOperations):
        self.get_ocp_details()
        self.get_velero_details()
        self.get_storage_details()
+       self.get_bucket_details('velero')
        if self.this_is_downstream():
            self.oadp_get_version_info()
 
@@ -3239,7 +3274,30 @@ class OadpWorkloads(WorkloadsOperations):
         else:
             logger.info(f'*** Skipping post run cleaning up of OADP dataset  *** as self.__oadp_cleanup_dataset_post_run: {self.__oadp_cleanup_dataset_post_run}')
 
+    def capacity_in_bytes(self, storage_str):
+        """
+        This function takes a string representing storage capacity and returns the capacity in bytes
 
+        Args:
+            storage_str: A string representing storage capacity, e.g. '1000Gi' or '2Ti'
+
+        Returns:
+            An integer representing the storage capacity in bytes
+        """
+        storage_unit = storage_str[-2:]
+        storage_value = int(storage_str[:-2])
+
+        unit_multiplier = {
+            'Ki': 2 ** 10,
+            'Mi': 2 ** 20,
+            'Gi': 2 ** 30,
+            'Ti': 2 ** 40,
+        }
+
+        if storage_unit not in unit_multiplier:
+            raise ValueError(f"Invalid storage unit: {storage_unit}")
+
+        return storage_value * unit_multiplier[storage_unit]
     @logger_time_stamp
     def checking_for_configurations_for_datamover(self, test_scenario):
         """
