@@ -32,7 +32,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_path = '/tmp/mpqe-scale-scripts/mtc-helpers/busybox'
         self.__oadp_base_dir = '/tmp/mpqe-scale-scripts/oadp-helpers'
         self.__oadp_misc_dir = '/tmp/mpqe-scale-scripts/misc-scripts'
-        self.__oadp_scenario_data = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/internal_data/tests_network.yaml'
+        self.__oadp_scenario_data = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/internal_data/tests.yaml'
         self.__oadp_promql_queries = '/tmp/mpqe-scale-scripts/oadp-helpers/templates/metrics/metrics-oadp.yaml'
         # environment variables
         self.__namespace = self._environment_variables_dict.get('namespace', '')
@@ -40,8 +40,8 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        self.__oadp_scenario_name = 'backup-1pod-kopia-pvc-util-0-0-4-cephrbd-6g' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vbd-pvc-util-minio-6g'
-        # self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
+        # self.__oadp_scenario_name = 'backup-restic-busybox-perf-single-1000-pods-cephrbd' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vbd-pvc-util-minio-6g'
+        self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
@@ -96,9 +96,13 @@ class OadpWorkloads(WorkloadsOperations):
         """
         method json dumps __run_metadata to file
         """
-        with open('/tmp/oadp-report.json', 'w', encoding='utf-8') as f:
-            json.dump(self.__run_metadata, f, indent=4, sort_keys=True, default=str)
+        try:
 
+            with open('/tmp/oadp-report.json', 'w', encoding='utf-8') as f:
+                json.dump(self.__run_metadata, f, indent=4, sort_keys=True, default=str)
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
     @logger_time_stamp
     def upload_oadp_result_to_elasticsearch(self):
@@ -460,26 +464,31 @@ class OadpWorkloads(WorkloadsOperations):
         sets ['summary']['results']['pod_restarts_post_run_validation']['status'] to true/false and lists pods with restart values
         :return:
         """
-        restart_query = "'.items[] | select(.status.containerStatuses[].restartCount > 0) | .metadata.name'"
-        pods_restarted_cmd = self.__ssh.run(
-            cmd=f'oc get pods -n {target_namespace} -o json | jq -r {restart_query}')
-        if pods_restarted_cmd != '':
-            self.__run_metadata['summary']['results']['pod_restarts_post_run_validation'] = {}
-            self.__run_metadata['summary']['results']['pod_restarts_post_run_validation']['status'] = False
-            get_pod_details = self.__ssh.run(cmd=f'oc get pods -n {target_namespace} -o json')
-            data = json.loads(get_pod_details)
-            pods_that_restarted = {}
-            for pod in data['items']:
-                if pod['status']['containerStatuses'][0]['restartCount'] > 0:
-                    name = pod['metadata']['name']
-                    pods_that_restarted[f'{name}'] = pod['status']['containerStatuses'][0]['restartCount']
-            self.__run_metadata['summary']['results']['pod_restarts_post_run_validation']['restarted_pods'] = {}
-            self.__run_metadata['summary']['results']['pod_restarts_post_run_validation']['restarted_pods'].update(pods_that_restarted)
-        else:
-            self.__run_metadata['summary']['results']['pod_restarts_post_run_validation'] = {}
-            self.__run_metadata['summary']['results']['pod_restarts_post_run_validation']['status'] = True
-            # Saving empty dict for query consistency in ELK querying
-            self.__run_metadata['summary']['results']['pod_restarts_post_run_validation']['restarted_pods'] = {}
+        try:
+
+            restart_query = "'.items[] | select(.status.containerStatuses[].restartCount > 0) | .metadata.name'"
+            pods_restarted_cmd = self.__ssh.run(
+                cmd=f'oc get pods -n {target_namespace} -o json | jq -r {restart_query}')
+            if pods_restarted_cmd != '':
+                self.__run_metadata['summary']['results']['pod_restarts_post_run_validation'] = {}
+                self.__run_metadata['summary']['results']['pod_restarts_post_run_validation']['status'] = False
+                get_pod_details = self.__ssh.run(cmd=f'oc get pods -n {target_namespace} -o json')
+                data = json.loads(get_pod_details)
+                pods_that_restarted = {}
+                for pod in data['items']:
+                    if pod['status']['containerStatuses'][0]['restartCount'] > 0:
+                        name = pod['metadata']['name']
+                        pods_that_restarted[f'{name}'] = pod['status']['containerStatuses'][0]['restartCount']
+                self.__run_metadata['summary']['results']['pod_restarts_post_run_validation']['restarted_pods'] = {}
+                self.__run_metadata['summary']['results']['pod_restarts_post_run_validation']['restarted_pods'].update(pods_that_restarted)
+            else:
+                self.__run_metadata['summary']['results']['pod_restarts_post_run_validation'] = {}
+                self.__run_metadata['summary']['results']['pod_restarts_post_run_validation']['status'] = True
+                # Saving empty dict for query consistency in ELK querying
+                self.__run_metadata['summary']['results']['pod_restarts_post_run_validation']['restarted_pods'] = {}
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
     @logger_time_stamp
     def verify_cluster_operators_status(self):
@@ -491,30 +500,35 @@ class OadpWorkloads(WorkloadsOperations):
         lists co that arent available/degraded only when relevant.
         :return:
         """
-        get_co_status = self.__ssh.run(cmd=f'oc get co -o json')
-        if get_co_status != '':
-            self.__run_metadata['summary']['results']['cluster_operator_post_run_validation'] = {}
-            data = json.loads(get_co_status)
-            co_degraded = {}
-            co_that_are_not_available = {}
-            for co in data['items']:
-                for s in co['status']['conditions']:
-                    if (s['type'] == 'Available' and s['status'] == 'False'):
-                        co_name = co['metadata']['name']
-                        co_that_are_not_available[f'{co_name}'] = s['status']
-                    if (s['type'] == 'Degraded' and s['status'] == 'True'):
-                        co_name = co['metadata']['name']
-                        co_degraded[f'{co_name}'] = s['status']
-            self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['unavailable'] = {}
-            if bool(co_that_are_not_available):
-                self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['unavailable'].update(co_that_are_not_available)
-            self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['degraded'] = {}
-            if bool(co_degraded):
-                self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['degraded'].update(co_degraded)
-            if (bool(co_that_are_not_available) == False) and (bool(co_degraded) == False):
-                self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['status'] = True
-            else:
-                self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['status'] = False
+        try:
+
+            get_co_status = self.__ssh.run(cmd=f'oc get co -o json')
+            if get_co_status != '':
+                self.__run_metadata['summary']['results']['cluster_operator_post_run_validation'] = {}
+                data = json.loads(get_co_status)
+                co_degraded = {}
+                co_that_are_not_available = {}
+                for co in data['items']:
+                    for s in co['status']['conditions']:
+                        if (s['type'] == 'Available' and s['status'] == 'False'):
+                            co_name = co['metadata']['name']
+                            co_that_are_not_available[f'{co_name}'] = s['status']
+                        if (s['type'] == 'Degraded' and s['status'] == 'True'):
+                            co_name = co['metadata']['name']
+                            co_degraded[f'{co_name}'] = s['status']
+                self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['unavailable'] = {}
+                if bool(co_that_are_not_available):
+                    self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['unavailable'].update(co_that_are_not_available)
+                self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['degraded'] = {}
+                if bool(co_degraded):
+                    self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['degraded'].update(co_degraded)
+                if (bool(co_that_are_not_available) == False) and (bool(co_degraded) == False):
+                    self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['status'] = True
+                else:
+                    self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['status'] = False
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
 
     @logger_time_stamp
@@ -534,27 +548,32 @@ class OadpWorkloads(WorkloadsOperations):
         """
         get bsl status
         """
-        retries = 0
-        max_retries = 30
-        bsl_default_name = self.__ssh.run(
-            cmd=f"oc get bsl -n {self.__test_env['velero_ns']} | grep true | awk '{{print $1}}'")
-        while retries < max_retries:
-            bsl_data = self.get_oc_resource_to_json(resource_type='bsl', resource_name=bsl_default_name,
-                                                    namespace=self.__test_env['velero_ns'])
-            logger.info(f"### INFO ### verify_bsl_status: attempt {retries} of {max_retries} shows cmd_output {bsl_data}")
-            if bool(bsl_data) == False:
-                logger.warn(':: ERROR :: get_bsl_status showed that BSL is not present or json resulted in empty dict')
-            if 'phase' in bsl_data['status']:
-                bsl_status = bsl_data['status']['phase']
-                logger.info(f"### INFO ### verify_bsl_status:  get_bsl_status returned status of {bsl_status}")
-                if bsl_status == "Available":
-                        return
-                else:
+        try:
+
+            retries = 0
+            max_retries = 30
+            bsl_default_name = self.__ssh.run(
+                cmd=f"oc get bsl -n {self.__test_env['velero_ns']} | grep true | awk '{{print $1}}'")
+            while retries < max_retries:
+                bsl_data = self.get_oc_resource_to_json(resource_type='bsl', resource_name=bsl_default_name,
+                                                        namespace=self.__test_env['velero_ns'])
+                logger.info(f"### INFO ### verify_bsl_status: attempt {retries} of {max_retries} shows cmd_output {bsl_data}")
+                if bool(bsl_data) == False:
+                    logger.warn(':: ERROR :: get_bsl_status showed that BSL is not present or json resulted in empty dict')
+                if 'phase' in bsl_data['status']:
+                    bsl_status = bsl_data['status']['phase']
                     logger.info(f"### INFO ### verify_bsl_status:  get_bsl_status returned status of {bsl_status}")
-            else:
-                logger.info(f':: INFO :: verify_bsl_status: BSL state is not ready as phase is not yet available sleeping for 5 seconds this may take up to 30s')
-                time.sleep(5)
-                retries += 1
+                    if bsl_status == "Available":
+                            return
+                    else:
+                        logger.info(f"### INFO ### verify_bsl_status:  get_bsl_status returned status of {bsl_status}")
+                else:
+                    logger.info(f':: INFO :: verify_bsl_status: BSL state is not ready as phase is not yet available sleeping for 5 seconds this may take up to 30s')
+                    time.sleep(5)
+                    retries += 1
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
 
     @logger_time_stamp
@@ -856,26 +875,31 @@ class OadpWorkloads(WorkloadsOperations):
         """
         method deletes namespaces used for original backup
         """
-        self.oadp_timer(action="start", transaction_name='delete_oadp_source_dataset')
-        for n in target_namespace.split(','):
-            del_ns_cmd = self.__ssh.run(cmd=f'oc delete ns {n}')
-            if del_ns_cmd.find('deleted') < 0:
-                print(f"attempt to delete namespace {n} failed")
-        self.oadp_timer(action="stop", transaction_name='delete_oadp_source_dataset')
-        # poll for dataset presence
         try:
-            time_spent_waiting_for_deletion = 0
-            while (time_spent_waiting_for_deletion < 900):
-                ns_data = self.get_oc_resource_to_json(resource_type='ns', resource_name=target_namespace,namespace=self.__test_env['velero_ns'])
-                if bool(ns_data) == False:
-                    logger.info(f':: info :: NS {target_namespace} deletion is completed')
-                    return True
-                else:
-                    logger.info(f':: info :: NS {target_namespace} deletion so far taken: {time_spent_waiting_for_deletion} of 900s allocated deletion ns resource shows: {ns_data}')
-                    time.sleep(2)
-                    time_spent_waiting_for_deletion += 2
+
+            self.oadp_timer(action="start", transaction_name='delete_oadp_source_dataset')
+            for n in target_namespace.split(','):
+                del_ns_cmd = self.__ssh.run(cmd=f'oc delete ns {n}')
+                if del_ns_cmd.find('deleted') < 0:
+                    print(f"attempt to delete namespace {n} failed")
+            self.oadp_timer(action="stop", transaction_name='delete_oadp_source_dataset')
+            # poll for dataset presence
+            try:
+                time_spent_waiting_for_deletion = 0
+                while (time_spent_waiting_for_deletion < 900):
+                    ns_data = self.get_oc_resource_to_json(resource_type='ns', resource_name=target_namespace,namespace=self.__test_env['velero_ns'])
+                    if bool(ns_data) == False:
+                        logger.info(f':: info :: NS {target_namespace} deletion is completed')
+                        return True
+                    else:
+                        logger.info(f':: info :: NS {target_namespace} deletion so far taken: {time_spent_waiting_for_deletion} of 900s allocated deletion ns resource shows: {ns_data}')
+                        time.sleep(2)
+                        time_spent_waiting_for_deletion += 2
+            except Exception as err:
+                logger.warn(f':: WARN :: in delete_source_dataset ::  raised an exception related to {target_namespace} deletion attempt {err}')
         except Exception as err:
-            logger.warn(f':: WARN :: in delete_source_dataset ::  raised an exception related to {target_namespace} deletion attempt {err}')
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
 
     @logger_time_stamp
@@ -992,20 +1016,25 @@ class OadpWorkloads(WorkloadsOperations):
         This method creates dataset for oadp to work against
         :return:
         """
-        if not ds:
-            logger.error(
-                f"### ERROR ### create_source_dataset is showing ds as empty meaning datasets are either not present or were not parsed from the {scenario.name} correctly as self.__scenario_datasets is empty")
-            logger.exception( "create_source_dataset: Please check your datasets defined in your yaml as no datasets were loaded into self.__scenario_datasets")
-        self.__retry_logic = {
-            'interval_between_checks': 15,
-            'max_attempts': 20
-        }
-        logger.info(f"### INFO ### create_source_dataset: ds is {ds}")
-        if ds['role'] == 'BusyBoxPodSingleNS.sh':
-            self.busybox_dataset_creation(scenario, ds)
-        if ds['role'] == 'generator' or ds['role'] == 'dd_generator':
-            self.create_multi_pvutil_dataset(scenario, ds)
+        try:
 
+            if not ds:
+                logger.error(
+                    f"### ERROR ### create_source_dataset is showing ds as empty meaning datasets are either not present or were not parsed from the {scenario.name} correctly as self.__scenario_datasets is empty")
+                logger.exception( "create_source_dataset: Please check your datasets defined in your yaml as no datasets were loaded into self.__scenario_datasets")
+            self.__retry_logic = {
+                'interval_between_checks': 15,
+                'max_attempts': 20
+            }
+            logger.info(f"### INFO ### create_source_dataset: ds is {ds}")
+            if ds['role'] == 'BusyBoxPodSingleNS.sh':
+                self.busybox_dataset_creation(scenario, ds)
+            if ds['role'] == 'generator' or ds['role'] == 'dd_generator':
+                self.create_multi_pvutil_dataset(scenario, ds)
+
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
     @logger_time_stamp
     def wait_until_process_inside_pod_completes(self, pod_name, namespace, process_text_to_monitor, timeout_value):
@@ -1114,22 +1143,26 @@ class OadpWorkloads(WorkloadsOperations):
         """
         parses ansible playbook output to verify stdout cotians unreachable=0  failed=0
         """
-        if playbook_output == '':
-            logger.exception(f"ansible-playbook stdout was empty and should not have been")
-        # parse data to get value for changed, unreachable, failed
-        failed_count = re.search(r'failed=(\d+)', playbook_output)
-        unreachable_count = re.search(r'unreachable=(\d+)', playbook_output)
-        if ((failed_count == None) or (unreachable_count == None)):
-            logger.error(f"ansible-playbook stdout did not contain expected values with regards to failed or changed or unreachable see: {playbook_output}")
-            return False
-        else:
-            if (int(failed_count.group(1)) == 0) and (int(unreachable_count.group(1)) == 0):
-                logger.info(f'ansible-playbook output ran without failures or unreachable errors')
-                return True
-            else:
-                logger.warn(f"ansible-playbook stdout did not contain expected values with regards to number of failures and unreachable related tasks : {playbook_output}")
-                return False
+        try:
 
+            if playbook_output == '':
+                logger.exception(f"ansible-playbook stdout was empty and should not have been")
+            # parse data to get value for changed, unreachable, failed
+            failed_count = re.search(r'failed=(\d+)', playbook_output)
+            unreachable_count = re.search(r'unreachable=(\d+)', playbook_output)
+            if ((failed_count == None) or (unreachable_count == None)):
+                logger.error(f"ansible-playbook stdout did not contain expected values with regards to failed or changed or unreachable see: {playbook_output}")
+                return False
+            else:
+                if (int(failed_count.group(1)) == 0) and (int(unreachable_count.group(1)) == 0):
+                    logger.info(f'ansible-playbook output ran without failures or unreachable errors')
+                    return True
+                else:
+                    logger.exception(f"ansible-playbook stdout did not contain expected values with regards to number of failures and unreachable related tasks : {playbook_output}")
+                    return False
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
     @logger_time_stamp
     def get_pod_pv_utilization_info_by_podname(self, podname, ds):
         results_capacity_usage = {}
@@ -1282,15 +1315,20 @@ class OadpWorkloads(WorkloadsOperations):
         this method is for executing restores
         """
         #              cmd: "oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero restore create {{restore_name}}  --from-backup {{backup_name}}"
-        if self.__test_env['source'] != 'upstream':
-            restore_cmd = self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero restore create {restore_name} --from-backup {backup_name} -n {self.__test_env['velero_ns']}")
-            logger.info(f"### INFO ### Executing OADP restore with: oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero restore create {restore_name} --from-backup {backup_name} -n {self.__test_env['velero_ns']}")
-        if self.__test_env['source'] == 'upstream':
-            restore_cmd = self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero restore create {restore_name} --from-backup {backup_name} -n {self.__test_env['velero_ns']}")
-            logger.info(f"### INFO ### Executing  UPSTREAM velero restore with: cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero restore create {restore_name} --from-backup {backup_name} -n {self.__test_env['velero_ns']}")
-        if restore_cmd.find('submitted successfully') == 0:
-            print("Error restore was not successfully started")
-            logging.error(f'Error restore did not execut stdout {restore_cmd}')
+        try:
+
+            if self.__test_env['source'] != 'upstream':
+                restore_cmd = self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero restore create {restore_name} --from-backup {backup_name} -n {self.__test_env['velero_ns']}")
+                logger.info(f"### INFO ### Executing OADP restore with: oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero restore create {restore_name} --from-backup {backup_name} -n {self.__test_env['velero_ns']}")
+            if self.__test_env['source'] == 'upstream':
+                restore_cmd = self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero restore create {restore_name} --from-backup {backup_name} -n {self.__test_env['velero_ns']}")
+                logger.info(f"### INFO ### Executing  UPSTREAM velero restore with: cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero restore create {restore_name} --from-backup {backup_name} -n {self.__test_env['velero_ns']}")
+            if restore_cmd.find('submitted successfully') == 0:
+                print("Error restore was not successfully started")
+                logging.error(f'Error restore did not execut stdout {restore_cmd}')
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
     @logger_time_stamp
     def exec_backup(self, plugin, backup_name, namespaces_to_backup):
@@ -1377,44 +1415,49 @@ class OadpWorkloads(WorkloadsOperations):
         """
         method polls for condition of OADP CR
         """
-        if not self.is_cr_present(ns=self.__test_env['velero_ns'], cr_type=cr_type, cr_name=cr_name):
-            logger.info(f'{cr_name} OADPWaitForConditionTimeout raised an exception in is_oadp_cr_present returned false')
-        jsonpath = "'{.status.phase}'"
-        get_state = self.__ssh.run(cmd=f"oc get {cr_type}/{cr_name} -n {self.__test_env['velero_ns']} -o jsonpath={jsonpath}")
         try:
-            current_wait_time = 0
-            while current_wait_time <= testcase_timeout:
-                state = self.__ssh.run(
-                    cmd=f"oc get {cr_type}/{cr_name} -n {self.__test_env['velero_ns']} -o jsonpath={jsonpath}")
-                if state in ['Completed', 'Failed', 'PartiallyFailed', 'Deleted', 'FinalizingPartiallyFailed', 'WaitingForPluginOperationsPartiallyFailed' ]:
-                    logger.info(f"::: INFO ::: wait_for_condition_of_oadp_cr: CR current status: of {cr_name} state: {state} in ['Completed', 'Failed', 'PartiallyFailed', 'FinalizingPartiallyFailed', 'WaitingForPluginOperationsPartiallyFailed']")
-                    return True
-                if state in ["couldn't get current server", "forbidden", "Unauthorized", "(Unauthorized)"]:
-                    logger.warning("### Warning ### Unauthorized error detected during CR poll wait_for_condition_of_cr issuing login attempt ")
-                    logged_in = self.oc_log_in()
-                    if not logged_in:
-                        logger.error(
-                            f':: ERROR :: wait_for_condition_of_oadp_cr: attempted to re-authenticate but failed and is returning ERROR in its current status: CR {cr_name} state: {state} that should not happen')
+
+            if not self.is_cr_present(ns=self.__test_env['velero_ns'], cr_type=cr_type, cr_name=cr_name):
+                logger.info(f'{cr_name} OADPWaitForConditionTimeout raised an exception in is_oadp_cr_present returned false')
+            jsonpath = "'{.status.phase}'"
+            get_state = self.__ssh.run(cmd=f"oc get {cr_type}/{cr_name} -n {self.__test_env['velero_ns']} -o jsonpath={jsonpath}")
+            try:
+                current_wait_time = 0
+                while current_wait_time <= testcase_timeout:
+                    state = self.__ssh.run(
+                        cmd=f"oc get {cr_type}/{cr_name} -n {self.__test_env['velero_ns']} -o jsonpath={jsonpath}")
+                    if state in ['Completed', 'Failed', 'PartiallyFailed', 'Deleted', 'FinalizingPartiallyFailed', 'WaitingForPluginOperationsPartiallyFailed' ]:
+                        logger.info(f"::: INFO ::: wait_for_condition_of_oadp_cr: CR current status: of {cr_name} state: {state} in ['Completed', 'Failed', 'PartiallyFailed', 'FinalizingPartiallyFailed', 'WaitingForPluginOperationsPartiallyFailed']")
+                        return True
+                    if state in ["couldn't get current server", "forbidden", "Unauthorized", "(Unauthorized)"]:
+                        logger.warning("### Warning ### Unauthorized error detected during CR poll wait_for_condition_of_cr issuing login attempt ")
+                        logged_in = self.oc_log_in()
+                        if not logged_in:
+                            logger.error(
+                                f':: ERROR :: wait_for_condition_of_oadp_cr: attempted to re-authenticate but failed and is returning ERROR in its current status: CR {cr_name} state: {state} that should not happen')
+                            return False
+                        else:
+                            logger.info(f"### INFO ### wait_for_condition_of_oadp_cr re-authenticated session successfully against the server log_in status: {logged_in}")
+                            state = self.__ssh.run(
+                                cmd=f"oc get {cr_type}/{cr_name} -n {self.__test_env['velero_ns']} -o jsonpath={jsonpath}")
+                            if state in ['Completed', 'Failed', 'PartiallyFailed', 'Deleted', 'FinalizingPartiallyFailed',
+                                         'WaitingForPluginOperationsPartiallyFailed']:
+                                logger.info(
+                                    f"::: INFO ::: wait_for_condition_of_oadp_cr: CR current status: of {cr_name} state: {state} in ['Completed', 'Failed', 'PartiallyFailed', 'FinalizingPartiallyFailed', 'WaitingForPluginOperationsPartiallyFailed']")
+                                return True
+
+                    if 'Error from server' in state:
+                        logger.error( f':: ERROR :: wait_for_condition_of_oadp_cr: is returning ERROR in its current status: CR {cr_name} state: {state} that should not happen')
                         return False
                     else:
-                        logger.info(f"### INFO ### wait_for_condition_of_oadp_cr re-authenticated session successfully against the server log_in status: {logged_in}")
-                        state = self.__ssh.run(
-                            cmd=f"oc get {cr_type}/{cr_name} -n {self.__test_env['velero_ns']} -o jsonpath={jsonpath}")
-                        if state in ['Completed', 'Failed', 'PartiallyFailed', 'Deleted', 'FinalizingPartiallyFailed',
-                                     'WaitingForPluginOperationsPartiallyFailed']:
-                            logger.info(
-                                f"::: INFO ::: wait_for_condition_of_oadp_cr: CR current status: of {cr_name} state: {state} in ['Completed', 'Failed', 'PartiallyFailed', 'FinalizingPartiallyFailed', 'WaitingForPluginOperationsPartiallyFailed']")
-                            return True
-
-                if 'Error from server' in state:
-                    logger.error( f':: ERROR :: wait_for_condition_of_oadp_cr: is returning ERROR in its current status: CR {cr_name} state: {state} that should not happen')
-                    return False
-                else:
-                    logger.info(f"::: INFO ::: wait_for_condition_of_oadp_cr: {state} meaning its still running as its NOT in 'Completed', 'Failed', 'PartiallyFailed' an Error state")
-                    time.sleep(3)
-                current_wait_time += 3
+                        logger.info(f"::: INFO ::: wait_for_condition_of_oadp_cr: {state} meaning its still running as its NOT in 'Completed', 'Failed', 'PartiallyFailed' an Error state")
+                        time.sleep(3)
+                    current_wait_time += 3
+            except Exception as err:
+                logger.info(f'{cr_name} OADPWaitForConditionTimeout raised an exception')
         except Exception as err:
-            logger.info(f'{cr_name} OADPWaitForConditionTimeout raised an exception')
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
 
     @logger_time_stamp
@@ -1422,11 +1465,16 @@ class OadpWorkloads(WorkloadsOperations):
         """
         This method returns true or false regarding CR presence
         """
-        list_of_crs = self.get_custom_resources(cr_type, ns)
-        if cr_name in list_of_crs:
-            return True
-        else:
-            return False
+        try:
+
+            list_of_crs = self.get_custom_resources(cr_type, ns)
+            if cr_name in list_of_crs:
+                return True
+            else:
+                return False
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
     @logger_time_stamp
     def verify_volsync_present(self):
@@ -1477,59 +1525,67 @@ class OadpWorkloads(WorkloadsOperations):
         """
         method waits for velero ns to stabilize after change
         """
-        get_workers_cmd = self.__ssh.run(
-            cmd="""oc get nodes -l node-role.kubernetes.io/worker -o jsonpath='{.items[*].metadata.name}'""")
-        num_of_node_agents_expected = len(get_workers_cmd.split(' '))
-        # node_agent + velero + adp_controll_manager
-        num_of_pods_expected = num_of_node_agents_expected + 2
         try:
+
+            get_workers_cmd = self.__ssh.run(
+                cmd="""oc get nodes -l node-role.kubernetes.io/worker -o jsonpath='{.items[*].metadata.name}'""")
+            num_of_node_agents_expected = len(get_workers_cmd.split(' '))
+            # node_agent + velero + adp_controll_manager
+            num_of_pods_expected = num_of_node_agents_expected + 2
             logger.info(":: INFO :: Waiting for DPA changes to take effect")
             time.sleep(15)
             self.verify_running_pods(num_of_pods_expected, target_namespace=oadp_namespace)
         except Exception as err:
             logger.error(f':: ERROR :: Issue in waiting for DPA changes to process in your oadp namespace {err}')
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
     def is_dpa_change_needed(self, scenario, oadp_namespace):
        """
        method checks current dpa to see if dpa change is needed
        """
-       dpa_data = self.get_oc_resource_to_json(resource_type='dpa', resource_name=self.__oadp_dpa,
-                                               namespace=oadp_namespace)
-       if bool(dpa_data) == False:
-           logger.error(
-               ':: ERROR :: FAIL DPA is not present command to get dpa as json resulted in empty dict will attempt to recreate')
+       try:
 
-       result = dpa_data['spec']['configuration']
-       uploader_type = ''
+           dpa_data = self.get_oc_resource_to_json(resource_type='dpa', resource_name=self.__oadp_dpa,
+                                                   namespace=oadp_namespace)
+           if bool(dpa_data) == False:
+               logger.error(
+                   ':: ERROR :: FAIL DPA is not present command to get dpa as json resulted in empty dict will attempt to recreate')
 
-       if 'nodeAgent' not in result or not result['nodeAgent']['enable']:
-           logger.warning("## WARNING ### is_dpa_change_needed: Condition not met: 'nodeAgent' must be present and 'enable' must be True.")
-           return True
+           result = dpa_data['spec']['configuration']
+           uploader_type = ''
 
-       if 'velero' not in result or 'defaultPlugins' not in result['velero'] or 'csi' not in result['velero'][
-           'defaultPlugins']:
-           logger.warning("## WARNING ### is_dpa_change_needed: Condition not met: 'csi' must be present in 'defaultPlugins' of 'velero'.")
-           return True
+           if 'nodeAgent' not in result or not result['nodeAgent']['enable']:
+               logger.warning("## WARNING ### is_dpa_change_needed: Condition not met: 'nodeAgent' must be present and 'enable' must be True.")
+               return True
 
-       if scenario['args']['plugin'] == 'restic':
-           uploader_type = 'restic'
-       else:
-           uploader_type = 'kopia'
+           if 'velero' not in result or 'defaultPlugins' not in result['velero'] or 'csi' not in result['velero'][
+               'defaultPlugins']:
+               logger.warning("## WARNING ### is_dpa_change_needed: Condition not met: 'csi' must be present in 'defaultPlugins' of 'velero'.")
+               return True
+
+           if scenario['args']['plugin'] == 'restic':
+               uploader_type = 'restic'
+           else:
+               uploader_type = 'kopia'
 
 
-       logger.info(f"### INFO ### current uploader type: {result['nodeAgent']['uploaderType'] } desired plugin type is: {uploader_type} ")
-       if 'nodeAgent' in result and 'uploaderType' in result['nodeAgent'] and result['nodeAgent']['uploaderType'] != uploader_type:
-           logger.warning(f"## WARNING ### is_dpa_change_needed: Condition not met: 'uploaderType' of 'nodeAgent' must be {uploader_type}.")
-           return True
+           logger.info(f"### INFO ### current uploader type: {result['nodeAgent']['uploaderType'] } desired plugin type is: {uploader_type} ")
+           if 'nodeAgent' in result and 'uploaderType' in result['nodeAgent'] and result['nodeAgent']['uploaderType'] != uploader_type:
+               logger.warning(f"## WARNING ### is_dpa_change_needed: Condition not met: 'uploaderType' of 'nodeAgent' must be {uploader_type}.")
+               return True
 
-       if 'velero' in result and 'logLevel' in result['velero'] and result['velero']['logLevel'] != 'debug':
-           logger.warning("## WARNING ### is_dpa_change_needed: Condition not met: 'logLevel' of 'velero' must be 'debug'.")
-           return True
+           if 'velero' in result and 'logLevel' in result['velero'] and result['velero']['logLevel'] != 'debug':
+               logger.warning("## WARNING ### is_dpa_change_needed: Condition not met: 'logLevel' of 'velero' must be 'debug'.")
+               return True
 
-       logger.info('### INFO ### DPA is valid and as expected - skipping DPA changes')
+           logger.info('### INFO ### DPA is valid and as expected - skipping DPA changes')
 
-       return False
+           return False
 
+       except Exception as err:
+           self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+           raise err
 
 
     @logger_time_stamp
@@ -1537,57 +1593,47 @@ class OadpWorkloads(WorkloadsOperations):
         """
         method sets up dpa for restic, kopia
         """
-        dpa_data = self.get_oc_resource_to_json(resource_type='dpa', resource_name=self.__oadp_dpa, namespace=oadp_namespace)
-        if bool(dpa_data) == False:
-            logger.error(':: ERROR :: FAIL DPA is not present command to get dpa as json resulted in empty dict will attempt to recreate')
-            logger.info(f'### INFO ### Updating DPA via ansible: ansible-playbook {self.__oadp_base_dir}/modify-dpa.yaml -vvv')
-            update_dpa = self.__ssh.run(cmd=f'cd  {self.__oadp_base_dir}; ansible-playbook {self.__oadp_base_dir}/modify-dpa.yaml -vvv')
+        try:
+
+            dpa_data = self.get_oc_resource_to_json(resource_type='dpa', resource_name=self.__oadp_dpa, namespace=oadp_namespace)
+            if bool(dpa_data) == False:
+                logger.error(':: ERROR :: FAIL DPA is not present command to get dpa as json resulted in empty dict will attempt to recreate')
+                logger.info(f'### INFO ### Updating DPA via ansible: ansible-playbook {self.__oadp_base_dir}/modify-dpa.yaml -vvv')
+                update_dpa = self.__ssh.run(cmd=f'cd  {self.__oadp_base_dir}; ansible-playbook {self.__oadp_base_dir}/modify-dpa.yaml -vvv')
+                ran_without_errors = self.validate_ansible_play(update_dpa)
+                if not ran_without_errors:
+                    logger.warn(f":: WARN :: DPA update FAILED to run successfully see:  {update_dpa} ")
+                else:
+                    logger.info(f":: INFO :: DPA update invoked successfully via ansible-play output was: {update_dpa} ")
+
+
+            dpa_name = dpa_data['metadata']['name']
+            bucket_name = dpa_data['spec']['backupLocations'][0]['velero']['objectStorage']['bucket']
+            config_profile = dpa_data['spec']['backupLocations'][0]['velero']['config']['profile']
+            s3Url = dpa_data['spec']['backupLocations'][0]['velero']['config']['s3Url']
+            cred_name = dpa_data['spec']['backupLocations'][0]['velero']['credential']['name']
+            #current_uploaderType = dpa_data['spec']['configuration']['nodeAgent']['uploaderType']
+            #uploader_type oadp_version bucket_name config_profile s3Url cred_name
+            velero_enabled_plugins = dpa_data['spec']['configuration']['velero']['defaultPlugins']
+            is_csi_enabled = 'csi' in velero_enabled_plugins
+            is_nodeagent_present = 'nodeAgent' in dpa_data['spec']['configuration']
+            if scenario['args']['plugin'] == 'csi' or  scenario['args']['plugin'] == 'vbd':
+                uploader_type = 'kopia'
+            else:
+                uploader_type = scenario['args']['plugin']
+            # because of 1.3 issue DPA patching not possible will need to invoke new dpa via j2
+            ansible_args = f"dpa_name={dpa_name} bucket_name={bucket_name} plugin_type={uploader_type} profile={config_profile} cred_name={cred_name} oadp_ns={oadp_namespace}"
+            logger.info(f'### INFO ### Updating DPA via ansible: ansible-playbook {self.__oadp_base_dir}/modify-dpa.yaml -e "{ansible_args}" -vvv')
+            update_dpa = self.__ssh.run(cmd=f'cd  {self.__oadp_base_dir}; ansible-playbook {self.__oadp_base_dir}/modify-dpa.yaml -e "{ansible_args}" -vvv')
             ran_without_errors = self.validate_ansible_play(update_dpa)
             if not ran_without_errors:
                 logger.warn(f":: WARN :: DPA update FAILED to run successfully see:  {update_dpa} ")
             else:
                 logger.info(f":: INFO :: DPA update invoked successfully via ansible-play output was: {update_dpa} ")
 
-
-        dpa_name = dpa_data['metadata']['name']
-        bucket_name = dpa_data['spec']['backupLocations'][0]['velero']['objectStorage']['bucket']
-        config_profile = dpa_data['spec']['backupLocations'][0]['velero']['config']['profile']
-        s3Url = dpa_data['spec']['backupLocations'][0]['velero']['config']['s3Url']
-        cred_name = dpa_data['spec']['backupLocations'][0]['velero']['credential']['name']
-        #current_uploaderType = dpa_data['spec']['configuration']['nodeAgent']['uploaderType']
-        #uploader_type oadp_version bucket_name config_profile s3Url cred_name
-        velero_enabled_plugins = dpa_data['spec']['configuration']['velero']['defaultPlugins']
-        is_csi_enabled = 'csi' in velero_enabled_plugins
-        is_nodeagent_present = 'nodeAgent' in dpa_data['spec']['configuration']
-        if scenario['args']['plugin'] == 'csi' or  scenario['args']['plugin'] == 'vbd':
-            uploader_type = 'kopia'
-        else:
-            uploader_type = scenario['args']['plugin']
-        # because of 1.3 issue DPA patching not possible will need to invoke new dpa via j2
-        ansible_args = f"dpa_name={dpa_name} bucket_name={bucket_name} plugin_type={uploader_type} profile={config_profile} cred_name={cred_name} oadp_ns={oadp_namespace}"
-        logger.info(f'### INFO ### Updating DPA via ansible: ansible-playbook {self.__oadp_base_dir}/modify-dpa.yaml -e "{ansible_args}" -vvv')
-        update_dpa = self.__ssh.run(cmd=f'cd  {self.__oadp_base_dir}; ansible-playbook {self.__oadp_base_dir}/modify-dpa.yaml -e "{ansible_args}" -vvv')
-        ran_without_errors = self.validate_ansible_play(update_dpa)
-        if not ran_without_errors:
-            logger.warn(f":: WARN :: DPA update FAILED to run successfully see:  {update_dpa} ")
-        else:
-            logger.info(f":: INFO :: DPA update invoked successfully via ansible-play output was: {update_dpa} ")
-
-        # if is_csi_enabled == False:
-        #     query = '[{"op": "replace", "path": "/spec/configuration", "value": {"nodeAgent": {"enable": true, "podConfig": {"resourceAllocations": {"limits": {"cpu": 2, "memory": "32768Mi"}, "requests": {"cpu": 1, "memory": "16384Mi"}}}}}}]'
-        #     self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
-        #                            patch_type='replace',
-        #                            patch_json=query)
-        # if plugin == 'restic':
-        #     query = '{"spec": {"configuration": {"nodeAgent": {"uploaderType": "restic"}}}}'
-        #     self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
-        #                            patch_type='merge',
-        #                            patch_json=query)
-        # if plugin == 'kopia' or plugin == 'vbd':
-        #     query = '{"spec": {"configuration": {"nodeAgent": {"uploaderType": "kopia"}}}}'
-        #     self.patch_oc_resource(resource_type='dpa', resource_name='example-velero', namespace=oadp_namespace,
-        #                            patch_type='merge',
-        #                            patch_json=query)
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
     @logger_time_stamp
     def config_dpa_for_cephfs_shallow(self, enable, oadp_namespace):
@@ -1812,17 +1858,22 @@ class OadpWorkloads(WorkloadsOperations):
         """
         Sets volume snapshot class per storage
         """
-        cmd_set_volume_snapshot_class = ''
-        if sc == 'ocs-storagecluster-ceph-rbd':
-            cmd_set_volume_snapshot_class = self.__ssh.run(cmd=f"oc apply -f {self.__oadp_base_dir}/vsc-cephRBD.yaml")
-        if sc == 'ocs-storagecluster-cephfs' or sc == 'ocs-storagecluster-cephfs-shallow':
-            cmd_set_volume_snapshot_class = self.__ssh.run(cmd=f"oc apply -f {self.__oadp_base_dir}/vsc-cephFS.yaml")
-        expected_result_output = ['created', 'unchanged', 'configured', 'already exists for driver']
-        if any(ext in cmd_set_volume_snapshot_class for ext in expected_result_output) == False:
-            logger.error(f":: INFO :: set_volume_snapshot_class: not successful to setup for  {sc}  output from comand was {cmd_set_volume_snapshot_class} ")
-            logger.exception(f"Unable to set volume-snapshot-class {sc}")
-        else:
-            logger.info(f":: INFO :: set_volume_snapshot_class: setup for  {sc} ")
+        try:
+            cmd_set_volume_snapshot_class = ''
+            if sc == 'ocs-storagecluster-ceph-rbd':
+                cmd_set_volume_snapshot_class = self.__ssh.run(cmd=f"oc apply -f {self.__oadp_base_dir}/vsc-cephRBD.yaml")
+            if sc == 'ocs-storagecluster-cephfs' or sc == 'ocs-storagecluster-cephfs-shallow':
+                cmd_set_volume_snapshot_class = self.__ssh.run(cmd=f"oc apply -f {self.__oadp_base_dir}/vsc-cephFS.yaml")
+            expected_result_output = ['created', 'unchanged', 'configured', 'already exists for driver']
+            if any(ext in cmd_set_volume_snapshot_class for ext in expected_result_output) == False:
+                logger.error(f":: INFO :: set_volume_snapshot_class: not successful to setup for  {sc}  output from comand was {cmd_set_volume_snapshot_class} ")
+                logger.exception(f"Unable to set volume-snapshot-class {sc}")
+            else:
+                logger.info(f":: INFO :: set_volume_snapshot_class: setup for  {sc} ")
+
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
 
     @logger_time_stamp
@@ -1830,30 +1881,34 @@ class OadpWorkloads(WorkloadsOperations):
         """
         method returns default sc if not set then empy string returned
         """
-        current_sc = self.get_default_storage_class()
-        if current_sc != sc:
-            if current_sc == 'ocs-storagecluster-cephfs-shallow':
-                import packaging.version
-                current_oc_version = packaging.version.parse(self._oc.get_ocp_server_version())
-                minimal_supported_oc_version = packaging.version.parse('4.12.0')
-                if current_oc_version < minimal_supported_oc_version:
-                    logger.error(f":: ERROR :: CEPHFS-Shallow set to desired sc on unsupported oc version.  Please check your yaml scenario {self.__oadp_scenario_name}  for the storage class is set {sc} which requires {minimal_supported_oc_version}, this env is: {current_oc_version} ")
-            #set desired sc as default
-            json_sc = '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
-            set_def_sc_cmd = self.__ssh.run(cmd=f"oc patch storageclass {sc} -p '{json_sc}'")
-            if set_def_sc_cmd.find('patched') < 0:
-                print(f"Unable to set {sc} as default storage class")
-                logger.exception(f"Unable to set {sc} as default storage class")
-        # Verify other storage classes present are not set as default storage
-        cmd_output = self.__ssh.run(cmd=f'oc get sc -o jsonpath="{{.items[*].metadata.name}}"')
-        list_of_storage_class_present = list(filter(None, cmd_output.split(' ')))
-        for storage in list_of_storage_class_present:
-            if storage != sc:
-                # set default storage class to false
-                json_sc = '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}'
-                set_sc_as_non_default_cmd = self.__ssh.run(cmd=f"oc patch storageclass {storage} -p '{json_sc}'")
-                if set_sc_as_non_default_cmd.find('patched') < 0:
-                    logger.warn(f"Note that storage {storage} was set  is-default-class:false as its not desired sc of {sc} ")
+        try:
+            current_sc = self.get_default_storage_class()
+            if current_sc != sc:
+                if current_sc == 'ocs-storagecluster-cephfs-shallow':
+                    import packaging.version
+                    current_oc_version = packaging.version.parse(self._oc.get_ocp_server_version())
+                    minimal_supported_oc_version = packaging.version.parse('4.12.0')
+                    if current_oc_version < minimal_supported_oc_version:
+                        logger.error(f":: ERROR :: CEPHFS-Shallow set to desired sc on unsupported oc version.  Please check your yaml scenario {self.__oadp_scenario_name}  for the storage class is set {sc} which requires {minimal_supported_oc_version}, this env is: {current_oc_version} ")
+                #set desired sc as default
+                json_sc = '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+                set_def_sc_cmd = self.__ssh.run(cmd=f"oc patch storageclass {sc} -p '{json_sc}'")
+                if set_def_sc_cmd.find('patched') < 0:
+                    print(f"Unable to set {sc} as default storage class")
+                    logger.exception(f"Unable to set {sc} as default storage class")
+            # Verify other storage classes present are not set as default storage
+            cmd_output = self.__ssh.run(cmd=f'oc get sc -o jsonpath="{{.items[*].metadata.name}}"')
+            list_of_storage_class_present = list(filter(None, cmd_output.split(' ')))
+            for storage in list_of_storage_class_present:
+                if storage != sc:
+                    # set default storage class to false
+                    json_sc = '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}'
+                    set_sc_as_non_default_cmd = self.__ssh.run(cmd=f"oc patch storageclass {storage} -p '{json_sc}'")
+                    if set_sc_as_non_default_cmd.find('patched') < 0:
+                        logger.warn(f"Note that storage {storage} was set  is-default-class:false as its not desired sc of {sc} ")
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_currnt_function())
+            raise err
 
     @logger_time_stamp
     def patch_oc_resource(self, resource_type, resource_name, namespace, patch_type, patch_json):
@@ -1899,81 +1954,86 @@ class OadpWorkloads(WorkloadsOperations):
         oadp_details = {
             "oadp": {}
         }
+        try:
 
-        jsonpath_oadp_operator_container_image = "'{.spec.template.spec.containers[0].image}'"
-        oadp_operator_container_image = self.__ssh.run(
-            cmd=f"oc get deployment openshift-adp-controller-manager --namespace={self.__test_env['velero_ns']} -o jsonpath={jsonpath_oadp_operator_container_image}")
-        if oadp_operator_container_image != '':
-            oadp_details['oadp']['oadp_operator_container_image'] = oadp_operator_container_image
 
-        jsonpath_oadp_csv = "'{.items[0].metadata.labels.olm\.owner}'"
-        oadp_csv = self.__ssh.run(
-            cmd=f"oc get deployments --all-namespaces --field-selector='metadata.name={self.__test_env['velero_ns']}-controller-manager' -o jsonpath={jsonpath_oadp_csv}")
-        if oadp_csv != '':
-            oadp_details['oadp']['oadp_csv'] = oadp_csv
+            jsonpath_oadp_operator_container_image = "'{.spec.template.spec.containers[0].image}'"
+            oadp_operator_container_image = self.__ssh.run(
+                cmd=f"oc get deployment openshift-adp-controller-manager --namespace={self.__test_env['velero_ns']} -o jsonpath={jsonpath_oadp_operator_container_image}")
+            if oadp_operator_container_image != '':
+                oadp_details['oadp']['oadp_operator_container_image'] = oadp_operator_container_image
 
-        jsonpath_oadp_csv_creation_time = "'{.items[0].metadata.annotations.createdAt}'"
-        oadp_csv_creation_time = self.__ssh.run(
-            cmd=f"oc get -n {self.__test_env['velero_ns']} csv  -o jsonpath={jsonpath_oadp_csv_creation_time}")
-        if oadp_csv_creation_time != '':
-            oadp_details['oadp']['oadp_csv_creation_time'] = oadp_csv_creation_time.split('.')[0]
+            jsonpath_oadp_csv = "'{.items[0].metadata.labels.olm\.owner}'"
+            oadp_csv = self.__ssh.run(
+                cmd=f"oc get deployments --all-namespaces --field-selector='metadata.name={self.__test_env['velero_ns']}-controller-manager' -o jsonpath={jsonpath_oadp_csv}")
+            if oadp_csv != '':
+                oadp_details['oadp']['oadp_csv'] = oadp_csv
 
-        jsonpath_oadp_subscription_used = "{.items[?(@.status.installedCSV == " + f'"{oadp_csv}"' + ")].metadata.name}"
-        oadp_subscription_used = self.__ssh.run(
-            cmd=f"oc get subscription.operators.coreos.com --namespace {self.__test_env['velero_ns']} -o jsonpath='{jsonpath_oadp_subscription_used}'")
-        if oadp_subscription_used != '':
-            oadp_details['oadp']['subscription'] = oadp_subscription_used
+            jsonpath_oadp_csv_creation_time = "'{.items[0].metadata.annotations.createdAt}'"
+            oadp_csv_creation_time = self.__ssh.run(
+                cmd=f"oc get -n {self.__test_env['velero_ns']} csv  -o jsonpath={jsonpath_oadp_csv_creation_time}")
+            if oadp_csv_creation_time != '':
+                oadp_details['oadp']['oadp_csv_creation_time'] = oadp_csv_creation_time.split('.')[0]
 
-        jsonpath_oadp_catalog_source = "'{.spec.source}'"
-        oadp_catalog_source = self.__ssh.run(
-            cmd=f"oc get subscription.operators.coreos.com {oadp_subscription_used} --namespace {self.__test_env['velero_ns']} -o jsonpath={jsonpath_oadp_catalog_source}")
-        if oadp_catalog_source != '':
-            oadp_details['oadp']['catalog_source'] = oadp_catalog_source
-            #get iib here
-            jsonpath_oadp_iib = "'{.spec.image}'"
-            oadp_iib_cmd =  self.__ssh.run(cmd=f"oc get catsrc {oadp_catalog_source} -n openshift-marketplace -o jsonpath={jsonpath_oadp_iib} --ignore-not-found | grep -Eo 'iib:[0-9]+'")
-            if oadp_iib_cmd != '':
-                logger.info (f"Attempting Datagrepper request as:  curl -s -k https://datagrepper.engineering.redhat.com/raw\?topic\=/topic/VirtualTopic.eng.ci.redhat-container-image.index.built\&contains\={oadp_iib_cmd}\&rows_per_page\=1\&delta\=15552000 | jq -r '.raw_messages[0].msg.artifact.nvr'")
-                oadp_internal_build = self.__ssh.run(cmd=f"curl -s -k https://datagrepper.engineering.redhat.com/raw\?topic\=/topic/VirtualTopic.eng.ci.redhat-container-image.index.built\&contains\={oadp_iib_cmd}\&rows_per_page\=1\&delta\=15552000 | jq -r '.raw_messages[0].msg.artifact.nvr'")
-                if oadp_internal_build != '':
-                    logger.info(f"DataGrepper Curl command returned {oadp_internal_build}")
-                    if 'oadp-operator-bundle-container-' in oadp_internal_build:
-                        oadp_details['oadp']['internal_build'] = oadp_internal_build.split('oadp-operator-bundle-container-')[1]
-                    if 'iib:' in oadp_iib_cmd:
-                        oadp_details['oadp']['iib'] = oadp_iib_cmd.split('iib:')[1]
-        else:
-            # internal build is not set must parse from operator name
-            import re
-            oadp_details['oadp']['internal_build'] = re.search(r'\w+-\w+\.\w([\d\.]+)', oadp_csv).group(1)
-            logger.info(f"::: INFO :: OADP internal build not available will parse from operator csv for major version {oadp_details['oadp']['internal_build']}")
+            jsonpath_oadp_subscription_used = "{.items[?(@.status.installedCSV == " + f'"{oadp_csv}"' + ")].metadata.name}"
+            oadp_subscription_used = self.__ssh.run(
+                cmd=f"oc get subscription.operators.coreos.com --namespace {self.__test_env['velero_ns']} -o jsonpath='{jsonpath_oadp_subscription_used}'")
+            if oadp_subscription_used != '':
+                oadp_details['oadp']['subscription'] = oadp_subscription_used
 
-        jsonpath_cluster_name = "'{print $2}'"
-        cluster_name = self.__ssh.run(
-            cmd=f"oc get route/console -n openshift-console | grep -v NAME | awk {jsonpath_cluster_name}")
-        if cluster_name != '':
-            self.__run_metadata['summary']['env']['ocp']['cluster'] = cluster_name
+            jsonpath_oadp_catalog_source = "'{.spec.source}'"
+            oadp_catalog_source = self.__ssh.run(
+                cmd=f"oc get subscription.operators.coreos.com {oadp_subscription_used} --namespace {self.__test_env['velero_ns']} -o jsonpath={jsonpath_oadp_catalog_source}")
+            if oadp_catalog_source != '':
+                oadp_details['oadp']['catalog_source'] = oadp_catalog_source
+                #get iib here
+                jsonpath_oadp_iib = "'{.spec.image}'"
+                oadp_iib_cmd =  self.__ssh.run(cmd=f"oc get catsrc {oadp_catalog_source} -n openshift-marketplace -o jsonpath={jsonpath_oadp_iib} --ignore-not-found | grep -Eo 'iib:[0-9]+'")
+                if oadp_iib_cmd != '':
+                    logger.info (f"Attempting Datagrepper request as:  curl -s -k https://datagrepper.engineering.redhat.com/raw\?topic\=/topic/VirtualTopic.eng.ci.redhat-container-image.index.built\&contains\={oadp_iib_cmd}\&rows_per_page\=1\&delta\=15552000 | jq -r '.raw_messages[0].msg.artifact.nvr'")
+                    oadp_internal_build = self.__ssh.run(cmd=f"curl -s -k https://datagrepper.engineering.redhat.com/raw\?topic\=/topic/VirtualTopic.eng.ci.redhat-container-image.index.built\&contains\={oadp_iib_cmd}\&rows_per_page\=1\&delta\=15552000 | jq -r '.raw_messages[0].msg.artifact.nvr'")
+                    if oadp_internal_build != '':
+                        logger.info(f"DataGrepper Curl command returned {oadp_internal_build}")
+                        if 'oadp-operator-bundle-container-' in oadp_internal_build:
+                            oadp_details['oadp']['internal_build'] = oadp_internal_build.split('oadp-operator-bundle-container-')[1]
+                        if 'iib:' in oadp_iib_cmd:
+                            oadp_details['oadp']['iib'] = oadp_iib_cmd.split('iib:')[1]
+            else:
+                # internal build is not set must parse from operator name
+                import re
+                oadp_details['oadp']['internal_build'] = re.search(r'\w+-\w+\.\w([\d\.]+)', oadp_csv).group(1)
+                logger.info(f"::: INFO :: OADP internal build not available will parse from operator csv for major version {oadp_details['oadp']['internal_build']}")
 
-        get_ocp_version_cmd = self.__ssh.run(cmd=f"oc version | grep 'Server Version'")
-        ocp_version = get_ocp_version_cmd.split('Version:')[1]
-        if ocp_version != '':
-            self.__run_metadata['summary']['env']['ocp']['version'] = ocp_version
+            jsonpath_cluster_name = "'{print $2}'"
+            cluster_name = self.__ssh.run(
+                cmd=f"oc get route/console -n openshift-console | grep -v NAME | awk {jsonpath_cluster_name}")
+            if cluster_name != '':
+                self.__run_metadata['summary']['env']['ocp']['cluster'] = cluster_name
 
-        # get number of masters
-        get_masters_cmd = self.__ssh.run(
-            cmd="""oc get nodes -l node-role.kubernetes.io/master -o jsonpath='{.items[*].metadata.name}'""")
-        num_of_masters = len(get_masters_cmd.split(' '))
-        if num_of_masters != '':
-            self.__run_metadata['summary']['env']['ocp']['num_of_masters'] = num_of_masters
+            get_ocp_version_cmd = self.__ssh.run(cmd=f"oc version | grep 'Server Version'")
+            ocp_version = get_ocp_version_cmd.split('Version:')[1]
+            if ocp_version != '':
+                self.__run_metadata['summary']['env']['ocp']['version'] = ocp_version
 
-        get_workers_cmd = self.__ssh.run(
-            cmd="""oc get nodes -l node-role.kubernetes.io/worker -o jsonpath='{.items[*].metadata.name}'""")
-        num_of_workers = len(get_workers_cmd.split(' '))
-        if num_of_workers != '':
-            self.__run_metadata['summary']['env']['ocp']['num_of_workers'] = num_of_workers
+            # get number of masters
+            get_masters_cmd = self.__ssh.run(
+                cmd="""oc get nodes -l node-role.kubernetes.io/master -o jsonpath='{.items[*].metadata.name}'""")
+            num_of_masters = len(get_masters_cmd.split(' '))
+            if num_of_masters != '':
+                self.__run_metadata['summary']['env']['ocp']['num_of_masters'] = num_of_masters
 
-        self.__run_metadata['summary']['env'].update(oadp_details)
-        self.__result_dicts.append(self.__run_metadata['summary']['env'])
+            get_workers_cmd = self.__ssh.run(
+                cmd="""oc get nodes -l node-role.kubernetes.io/worker -o jsonpath='{.items[*].metadata.name}'""")
+            num_of_workers = len(get_workers_cmd.split(' '))
+            if num_of_workers != '':
+                self.__run_metadata['summary']['env']['ocp']['num_of_workers'] = num_of_workers
 
+            self.__run_metadata['summary']['env'].update(oadp_details)
+            self.__result_dicts.append(self.__run_metadata['summary']['env'])
+
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
     @logger_time_stamp
     def get_ocp_details(self):
         """
@@ -2018,55 +2078,61 @@ class OadpWorkloads(WorkloadsOperations):
         This method can delete backup or delete cr
         cr_name allows for specifying specific CR or '*' will delete all CRs
         """
-        self.oadp_timer(action="start", transaction_name='Delete existing OADP CR')
-        if cr_name == '*':
-            list_of_crs_to_delete = self.get_custom_resources(cr_type, ns)
-            if len(list_of_crs_to_delete) > 0:
-                for i in range(len(list_of_crs_to_delete)):
-                    if self.__test_env['source'] == 'downstream':
-                        del_cmd = self.__ssh.run(cmd=f'oc -n {ns} exec deployment/velero -c velero -it -- ./velero {cr_type} delete {list_of_crs_to_delete[i]} --confirm')
-                    if self.__test_env['source'] == 'upstream':
-                        del_cmd = self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero {cr_type} delete {list_of_crs_to_delete[i]} --confirm -n {ns}")
-                    if del_cmd.find('submitted successfully') < 0:
-                        print("Error did not delete successfully")
-        else:
-            if cr_name != '*' and cr_name != '':
-                if self.__test_env['source'] == 'downstream':
-                    del_cmd = self.__ssh.run(cmd=f'oc -n {ns} exec deployment/velero -c velero -it -- ./velero {cr_type} delete {cr_name} --confirm')
-                if self.__test_env['source'] == 'upstream':
-                    del_cmd = self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero {cr_type} delete {cr_name} --confirm -n {ns}")
-                if del_cmd != None and ('submitted successfully' in del_cmd or 'deleted' in del_cmd):
-                    logger.info(f":: INFO :: OADP CR deleted by: velero {cr_type} delete {cr_name} completed successfully")
-                elif del_cmd != None and f"No {cr_type}s found" in del_cmd:
-                    logger.info('CR not found so delete failed as it doesnt exist')
-                else:
-                    logger.info(f"=== Attempt to delete was not successful the output was: {del_cmd}")
-        self.oadp_timer(action="stop", transaction_name='Delete existing OADP CR')
-        # poll for deletion
         try:
-            is_cr_present = self.is_cr_present(ns=ns, cr_type=cr_type, cr_name=cr_name)
-            if is_cr_present:
-                time_spent_waiting_for_deletion = 0
-                while (time_spent_waiting_for_deletion < 900):
-                    is_cr_present = self.is_cr_present(ns=ns, cr_type=cr_type, cr_name=cr_name)
-                    if is_cr_present:
-                        cr_data = self.get_oc_resource_to_json(resource_type=cr_type, resource_name=cr_name,namespace=ns)
-                        if bool(cr_data) == False:
-                            logger.info(f':: info :: delete_oadp_custom_resources {cr_name} in {ns} deletion is completed')
-                            return True
-                        else:
-                            logger.info(
-                                f':: info ::delete_oadp_custom_resources {cr_name} deletion so far taken: {time_spent_waiting_for_deletion} of 900s allocated deletion ns resource shows: {cr_data}')
-                        logger.info(f":: INFO :: delete_oadp_custom_resources issued deletion of {cr_name} which is a {cr_type} curretly waitng on this CR to be removed")
-                        time.sleep(2)
-                        time_spent_waiting_for_deletion += 2
-                    else:
-                        logger.info(f'::INFO:: {cr_name} no longer found delete has completed successfully')
-                        return True
+
+            self.oadp_timer(action="start", transaction_name='Delete existing OADP CR')
+            if cr_name == '*':
+                list_of_crs_to_delete = self.get_custom_resources(cr_type, ns)
+                if len(list_of_crs_to_delete) > 0:
+                    for i in range(len(list_of_crs_to_delete)):
+                        if self.__test_env['source'] == 'downstream':
+                            del_cmd = self.__ssh.run(cmd=f'oc -n {ns} exec deployment/velero -c velero -it -- ./velero {cr_type} delete {list_of_crs_to_delete[i]} --confirm')
+                        if self.__test_env['source'] == 'upstream':
+                            del_cmd = self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero {cr_type} delete {list_of_crs_to_delete[i]} --confirm -n {ns}")
+                        if del_cmd.find('submitted successfully') < 0:
+                            print("Error did not delete successfully")
             else:
-                logger.info(f'::INFO:: {cr_name} no longer found delete has completed successfully')
+                if cr_name != '*' and cr_name != '':
+                    if self.__test_env['source'] == 'downstream':
+                        del_cmd = self.__ssh.run(cmd=f'oc -n {ns} exec deployment/velero -c velero -it -- ./velero {cr_type} delete {cr_name} --confirm')
+                    if self.__test_env['source'] == 'upstream':
+                        del_cmd = self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero {cr_type} delete {cr_name} --confirm -n {ns}")
+                    if del_cmd != None and ('submitted successfully' in del_cmd or 'deleted' in del_cmd):
+                        logger.info(f":: INFO :: OADP CR deleted by: velero {cr_type} delete {cr_name} completed successfully")
+                    elif del_cmd != None and f"No {cr_type}s found" in del_cmd:
+                        logger.info('CR not found so delete failed as it doesnt exist')
+                    else:
+                        logger.info(f"=== Attempt to delete was not successful the output was: {del_cmd}")
+            self.oadp_timer(action="stop", transaction_name='Delete existing OADP CR')
+            # poll for deletion
+            try:
+                is_cr_present = self.is_cr_present(ns=ns, cr_type=cr_type, cr_name=cr_name)
+                if is_cr_present:
+                    time_spent_waiting_for_deletion = 0
+                    while (time_spent_waiting_for_deletion < 900):
+                        is_cr_present = self.is_cr_present(ns=ns, cr_type=cr_type, cr_name=cr_name)
+                        if is_cr_present:
+                            cr_data = self.get_oc_resource_to_json(resource_type=cr_type, resource_name=cr_name,namespace=ns)
+                            if bool(cr_data) == False:
+                                logger.info(f':: info :: delete_oadp_custom_resources {cr_name} in {ns} deletion is completed')
+                                return True
+                            else:
+                                logger.info(
+                                    f':: info ::delete_oadp_custom_resources {cr_name} deletion so far taken: {time_spent_waiting_for_deletion} of 900s allocated deletion ns resource shows: {cr_data}')
+                            logger.info(f":: INFO :: delete_oadp_custom_resources issued deletion of {cr_name} which is a {cr_type} curretly waitng on this CR to be removed")
+                            time.sleep(2)
+                            time_spent_waiting_for_deletion += 2
+                        else:
+                            logger.info(f'::INFO:: {cr_name} no longer found delete has completed successfully')
+                            return True
+                else:
+                    logger.info(f'::INFO:: {cr_name} no longer found delete has completed successfully')
+            except Exception as err:
+                logger.warn(f':: WARN :: in delete_oadp_custom_resources  raised an exception related to {cr_name} deletion attempt {err}')
+
         except Exception as err:
-            logger.warn(f':: WARN :: in delete_oadp_custom_resources  raised an exception related to {cr_name} deletion attempt {err}')
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
     @logger_time_stamp
     def load_test_scenario(self):
@@ -2109,89 +2175,99 @@ class OadpWorkloads(WorkloadsOperations):
         this method parse CR for
         CR status, kind, itemsBackedUp, itemsRestored, totalItems, Cloud, startTimestamp, completionTimestamp, dyration
         """
-        # verify CR exists
-        oadp_cr_already_present = self.is_cr_present(ns=ns, cr_type=cr_type, cr_name=cr_name)
-        if not oadp_cr_already_present:
-            # todo Throw exception and fail test
-            print(f"Warning no matching cr {cr_name} of type: {cr_type} was found")
-        else:
-            # todo Avoid Multi OC cmds use single call by working against json output directly
-            cr_info = {}
-            jsonpath_cr_status = "'{.status.phase}'"
-            cr_status = self.__ssh.run(
-                cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_cr_status}")
-            if cr_status != '':
-                cr_info['cr_status'] = cr_status
-                if cr_status != 'Completed':
-                    logger.error(f'### parse_oadp_cr: After {cr_type} finished the CR status is {cr_status}')
-                else:
-                    logger.info(f'### parse_oadp_cr: After {cr_type} finished the CR status is {cr_status}')
+        try:
 
-            jsonpath_cr_kind = "'{.kind}'"
-            cr_kind = self.__ssh.run(
-                cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_cr_kind}")
-            if cr_kind != '':
-                cr_info['cr_kind'] = cr_kind
+            # verify CR exists
+            oadp_cr_already_present = self.is_cr_present(ns=ns, cr_type=cr_type, cr_name=cr_name)
+            if not oadp_cr_already_present:
+                # todo Throw exception and fail test
+                print(f"Warning no matching cr {cr_name} of type: {cr_type} was found")
+            else:
+                # todo Avoid Multi OC cmds use single call by working against json output directly
+                cr_info = {}
+                jsonpath_cr_status = "'{.status.phase}'"
+                cr_status = self.__ssh.run(
+                    cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_cr_status}")
+                if cr_status != '':
+                    cr_info['cr_status'] = cr_status
+                    if cr_status != 'Completed':
+                        logger.error(f'### parse_oadp_cr: After {cr_type} finished the CR status is {cr_status}')
+                    else:
+                        logger.info(f'### parse_oadp_cr: After {cr_type} finished the CR status is {cr_status}')
 
-            if cr_type == 'backup':
-                jsonpath_cr_items_backedup = "'{.status.progress.itemsBackedUp}'"
-                cr_items_backedup = self.__ssh.run(
-                    cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_cr_items_backedup}")
-                if cr_items_backedup != '':
-                    cr_info['cr_items_backedup'] = cr_items_backedup
+                jsonpath_cr_kind = "'{.kind}'"
+                cr_kind = self.__ssh.run(
+                    cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_cr_kind}")
+                if cr_kind != '':
+                    cr_info['cr_kind'] = cr_kind
 
-            if cr_type == 'restore':
-                jsonpath_cr_items_restored = "'{.status.progress.itemsRestored}'"
-                cr_items_restored = self.__ssh.run(
-                    cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_cr_items_restored}")
-                if cr_items_restored != '':
-                    cr_info['cr_items_restored'] = cr_items_restored
+                if cr_type == 'backup':
+                    jsonpath_cr_items_backedup = "'{.status.progress.itemsBackedUp}'"
+                    cr_items_backedup = self.__ssh.run(
+                        cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_cr_items_backedup}")
+                    if cr_items_backedup != '':
+                        cr_info['cr_items_backedup'] = cr_items_backedup
 
-            jsonpath_cr_items_total = "'{.status.progress.totalItems}'"
-            cr_items_total = self.__ssh.run(
-                cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_cr_items_total}")
-            if cr_items_total != '':
-                cr_info['cr_items_total'] = cr_items_total
+                if cr_type == 'restore':
+                    jsonpath_cr_items_restored = "'{.status.progress.itemsRestored}'"
+                    cr_items_restored = self.__ssh.run(
+                        cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_cr_items_restored}")
+                    if cr_items_restored != '':
+                        cr_info['cr_items_restored'] = cr_items_restored
 
-            jsonpath_cr_errors = "'{.status.errors}'"
-            cr_errors = self.__ssh.run(
-                cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_cr_items_total}")
-            if cr_items_total != '':
-                cr_info['cr_errors'] = cr_errors
+                jsonpath_cr_items_total = "'{.status.progress.totalItems}'"
+                cr_items_total = self.__ssh.run(
+                    cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_cr_items_total}")
+                if cr_items_total != '':
+                    cr_info['cr_items_total'] = cr_items_total
 
-            jsonpath_cr_start_timestamp = "'{.status.startTimestamp}'"
-            cr_start_timestamp = self.__ssh.run(
-                cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_cr_start_timestamp}")
-            if cr_start_timestamp != '':
-                cr_info['cr_start_timestamp'] = cr_start_timestamp
+                jsonpath_cr_errors = "'{.status.errors}'"
+                cr_errors = self.__ssh.run(
+                    cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_cr_items_total}")
+                if cr_items_total != '':
+                    cr_info['cr_errors'] = cr_errors
 
-            jsonpath_cr_completion_timestamp = "'{.status.completionTimestamp}'"
-            cr_completion_timestamp = self.__ssh.run(
-                cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_cr_completion_timestamp}")
-            if cr_completion_timestamp != '':
-                cr_info['cr_completion_timestamp'] = cr_completion_timestamp
+                jsonpath_cr_start_timestamp = "'{.status.startTimestamp}'"
+                cr_start_timestamp = self.__ssh.run(
+                    cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_cr_start_timestamp}")
                 if cr_start_timestamp != '':
-                    cr_info['total_duration'] = (parser.parse(cr_info['cr_completion_timestamp']) - parser.parse(
-                        cr_info['cr_start_timestamp']))
-            awk_cr_cluster = "'{print $2}'"
-            cr_cluster = self.__ssh.run(
-                cmd=f"oc get route/console -n openshift-console | grep -v NAME | awk {awk_cr_cluster}")
-            if cr_cluster != '':
-                cr_info['cr_cluster'] = cr_cluster
+                    cr_info['cr_start_timestamp'] = cr_start_timestamp
 
-            print(f'cr_info is {cr_info}')
-            self.__run_metadata['summary']['runtime']['results'] = {}
-            self.__run_metadata['summary']['runtime']['results'].update(cr_info)
-            self.__result_dicts.append(self.__run_metadata['summary']['runtime']['results'])
+                jsonpath_cr_completion_timestamp = "'{.status.completionTimestamp}'"
+                cr_completion_timestamp = self.__ssh.run(
+                    cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_cr_completion_timestamp}")
+                if cr_completion_timestamp != '':
+                    cr_info['cr_completion_timestamp'] = cr_completion_timestamp
+                    if cr_start_timestamp != '':
+                        cr_info['total_duration'] = (parser.parse(cr_info['cr_completion_timestamp']) - parser.parse(
+                            cr_info['cr_start_timestamp']))
+                awk_cr_cluster = "'{print $2}'"
+                cr_cluster = self.__ssh.run(
+                    cmd=f"oc get route/console -n openshift-console | grep -v NAME | awk {awk_cr_cluster}")
+                if cr_cluster != '':
+                    cr_info['cr_cluster'] = cr_cluster
+
+                print(f'cr_info is {cr_info}')
+                self.__run_metadata['summary']['runtime']['results'] = {}
+                self.__run_metadata['summary']['runtime']['results'].update(cr_info)
+                self.__result_dicts.append(self.__run_metadata['summary']['runtime']['results'])
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
     @logger_time_stamp
     def set_run_status(self, msg={}):
         """
         method for setting status of run
         """
-        if msg:
-            self.__run_metadata['summary']['results'].update(msg)
-        self.__run_metadata['status'] = self.__run_metadata['summary']['runtime']['results'].get('cr_status', 'error')
+        try:
+
+            if msg:
+                self.__run_metadata['summary']['results'].update(msg)
+            self.__run_metadata['status'] = self.__run_metadata['summary']['runtime']['results'].get('cr_status', 'error')
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
     @logger_time_stamp
     def get_resources_per_pod(self, podname, namespace, label=''):
@@ -2259,48 +2335,53 @@ class OadpWorkloads(WorkloadsOperations):
         method returns oc adm top pods values for ns, when label is set to 'end' diffs of values are stored
         additional % of cpu/mem limit, pod uptime stored when limit is set to 'end'
         """
-        cmd_adm_top_ns_output = self.__ssh.run(cmd=f"oc adm top pods -n {namespace} --no-headers=true")
-        if len(cmd_adm_top_ns_output.splitlines()) == 0:
-            logger.warn(f'resulting query for get_resources_per_ns {namespace} resources failed 0 lines returned')
-        else:
-            cmd_adm_top_ns_output_list = list(filter(None, cmd_adm_top_ns_output.split('\n')))
-            if cmd_adm_top_ns_output_list is not None:
-                for val in cmd_adm_top_ns_output_list:
-                    adm_stdout_response = (list(filter(None, val.split(' '))))
+        try:
+
+            cmd_adm_top_ns_output = self.__ssh.run(cmd=f"oc adm top pods -n {namespace} --no-headers=true")
+            if len(cmd_adm_top_ns_output.splitlines()) == 0:
+                logger.warn(f'resulting query for get_resources_per_ns {namespace} resources failed 0 lines returned')
+            else:
+                cmd_adm_top_ns_output_list = list(filter(None, cmd_adm_top_ns_output.split('\n')))
+                if cmd_adm_top_ns_output_list is not None:
+                    for val in cmd_adm_top_ns_output_list:
+                        adm_stdout_response = (list(filter(None, val.split(' '))))
+                        if label == 'end':
+                            pod_index = self.find_metadata_index_for_pods(target=adm_stdout_response[0])
+                            if pod_index is not None:
+                                # pod_details = [{'cores': adm_stdout_response[1], 'mem': adm_stdout_response[2],'label': label}]
+                                # Diff of memory between pod samples
+                                original_sample = self.__run_metadata['summary']['resources']['run_time_pods'][pod_index][0]['mem']
+                                latest_sample =  adm_stdout_response[2]
+                                diff_mem = self.calc_resource_diff(original_sample, latest_sample)
+                                # Diff of milicores between samples
+                                original_sample = self.__run_metadata['summary']['resources']['run_time_pods'][pod_index][0]['cores']
+                                latest_sample = adm_stdout_response[1]
+                                diff_core = self.calc_resource_diff(original_sample, latest_sample)
+                                # Get pod base name per pod run time name
+                                pod_name_by_role = self.__oadp_runtime_resource_mapping[f'{adm_stdout_response[0]}']
+                                # Persist latest changes to hash indexed per pod run time name
+                                pod_details = {f'{label}_cores': adm_stdout_response[1], f'{label}_mem': adm_stdout_response[2], 'diff_core_percent': f'{diff_core:.1f}', 'diff_mem_percent': f'{diff_mem:.1f}', 'label': label}
+                                original_dict = self.__run_metadata['summary']['resources']['run_time_pods'][pod_index][0]
+                                self.__run_metadata['summary']['resources']['run_time_pods'][pod_index][0] = {**original_dict, **pod_details}
+                                # Set run time data to dict indexed by pod_role_name to allow for easy querying post run
+                                self.__run_metadata['summary']['resources']['pods'][pod_name_by_role] = self.__run_metadata['summary']['resources']['run_time_pods'][pod_index][0]
+                                del self.__run_metadata['summary']['resources']['run_time_pods'][pod_index]
+                        else:
+                            # Initalize key:value runtime pod name to base pod name for updating upon result collection
+                            self.initialize_pod_resources_by_base_name(pod_name=adm_stdout_response[0])
+                            get_pod_json_output = self.__ssh.run(cmd=f"oc get pod {adm_stdout_response[0]} -n {namespace} -o json")
+                            # Parse the JSON string into a Python object
+                            data = json.loads(get_pod_json_output)
+                            # Get resources req & limits of specific pod
+                            pod_resources = data['spec']['containers'][0]['resources']
+                            pod_details = [{'name': adm_stdout_response[0], 'cores': adm_stdout_response[1], 'mem': adm_stdout_response[2], 'resources': pod_resources, 'label': label}]
+                            self.__run_metadata['summary']['resources']['run_time_pods'].append(pod_details)
                     if label == 'end':
-                        pod_index = self.find_metadata_index_for_pods(target=adm_stdout_response[0])
-                        if pod_index is not None:
-                            # pod_details = [{'cores': adm_stdout_response[1], 'mem': adm_stdout_response[2],'label': label}]
-                            # Diff of memory between pod samples
-                            original_sample = self.__run_metadata['summary']['resources']['run_time_pods'][pod_index][0]['mem']
-                            latest_sample =  adm_stdout_response[2]
-                            diff_mem = self.calc_resource_diff(original_sample, latest_sample)
-                            # Diff of milicores between samples
-                            original_sample = self.__run_metadata['summary']['resources']['run_time_pods'][pod_index][0]['cores']
-                            latest_sample = adm_stdout_response[1]
-                            diff_core = self.calc_resource_diff(original_sample, latest_sample)
-                            # Get pod base name per pod run time name
-                            pod_name_by_role = self.__oadp_runtime_resource_mapping[f'{adm_stdout_response[0]}']
-                            # Persist latest changes to hash indexed per pod run time name
-                            pod_details = {f'{label}_cores': adm_stdout_response[1], f'{label}_mem': adm_stdout_response[2], 'diff_core_percent': f'{diff_core:.1f}', 'diff_mem_percent': f'{diff_mem:.1f}', 'label': label}
-                            original_dict = self.__run_metadata['summary']['resources']['run_time_pods'][pod_index][0]
-                            self.__run_metadata['summary']['resources']['run_time_pods'][pod_index][0] = {**original_dict, **pod_details}
-                            # Set run time data to dict indexed by pod_role_name to allow for easy querying post run
-                            self.__run_metadata['summary']['resources']['pods'][pod_name_by_role] = self.__run_metadata['summary']['resources']['run_time_pods'][pod_index][0]
-                            del self.__run_metadata['summary']['resources']['run_time_pods'][pod_index]
-                    else:
-                        # Initalize key:value runtime pod name to base pod name for updating upon result collection
-                        self.initialize_pod_resources_by_base_name(pod_name=adm_stdout_response[0])
-                        get_pod_json_output = self.__ssh.run(cmd=f"oc get pod {adm_stdout_response[0]} -n {namespace} -o json")
-                        # Parse the JSON string into a Python object
-                        data = json.loads(get_pod_json_output)
-                        # Get resources req & limits of specific pod
-                        pod_resources = data['spec']['containers'][0]['resources']
-                        pod_details = [{'name': adm_stdout_response[0], 'cores': adm_stdout_response[1], 'mem': adm_stdout_response[2], 'resources': pod_resources, 'label': label}]
-                        self.__run_metadata['summary']['resources']['run_time_pods'].append(pod_details)
-                if label == 'end':
-                    # updates existing dict of utlized limits for cpu/mem and uptime
-                    self.get_percentage_of_limit_utilized(ns=namespace)
+                        # updates existing dict of utlized limits for cpu/mem and uptime
+                        self.get_percentage_of_limit_utilized(ns=namespace)
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
 
 
@@ -2440,33 +2521,43 @@ class OadpWorkloads(WorkloadsOperations):
         """
         method collects all node avail resources via get_node_resource_avail_adm(self, ocp_node):
         """
-        get_all_ready_state_nodes = """oc get nodes -o=json | jq -r '.items[] | select(.status.conditions[] | select(.type=="Ready" and .status=="True")) | .metadata.name'"""
-        get_node_names = self.__ssh.run(cmd=f'{get_all_ready_state_nodes}')
-        if len(get_node_names.splitlines()) > 0 and 'error' not in get_node_names:
-            for bm in get_node_names.splitlines():
-                self.get_node_resource_avail_adm(ocp_node=bm)
+        try:
+
+            get_all_ready_state_nodes = """oc get nodes -o=json | jq -r '.items[] | select(.status.conditions[] | select(.type=="Ready" and .status=="True")) | .metadata.name'"""
+            get_node_names = self.__ssh.run(cmd=f'{get_all_ready_state_nodes}')
+            if len(get_node_names.splitlines()) > 0 and 'error' not in get_node_names:
+                for bm in get_node_names.splitlines():
+                    self.get_node_resource_avail_adm(ocp_node=bm)
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
+
 
     @logger_time_stamp
     def check_oadp_cr_for_errors_and_warns(self, scenario):
         """
         method validates state of CR and outputs log errors or warnings
         """
-        cr_type = scenario['args']['OADP_CR_TYPE']
-        cr_name = scenario['args']['OADP_CR_NAME']
-        jsonpath = "'{.status.errors}'"
-        error_count = self.__ssh.run(cmd=f"oc get {cr_type}/{cr_name} -n {self.__test_env['velero_ns']} -o jsonpath={jsonpath}")
-        if error_count != '' and 'Error' not in error_count and int(error_count) > 0:
-            oadp_velero_log = os.path.join(self._run_artifacts_path, f'{cr_name}-error-and-warning-summary.log')
-            if self.__test_env['source'] == 'upstream':
-                warnings_and_errors = self.__ssh.run(
-                    cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero {cr_type} logs {cr_name} -n {self.__test_env['velero_ns']} | grep 'warn\|error\|critical\|exception'")
-                self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero {cr_type} logs {cr_name} -n {self.__test_env['velero_ns']} | grep 'warn\|error\|critical\|exception' >> {oadp_velero_log}")
-            else:
-                warnings_and_errors = self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero {cr_type} logs {cr_name} --insecure-skip-tls-verify | grep 'warn\|error\|critical\|exception'")
-                self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero {cr_type} logs {cr_name} --insecure-skip-tls-verify | grep 'warn\|error\|critical\|exception' >> {oadp_velero_log}")
-            logger.info(f":: INFO ::  validate_oadp_cr :: reports the following {error_count} errors and warnings for {cr_name} ")
-            logger.warn(f":: WARN ::  {cr_name} log showed: {warnings_and_errors}")
+        try:
 
+            cr_type = scenario['args']['OADP_CR_TYPE']
+            cr_name = scenario['args']['OADP_CR_NAME']
+            jsonpath = "'{.status.errors}'"
+            error_count = self.__ssh.run(cmd=f"oc get {cr_type}/{cr_name} -n {self.__test_env['velero_ns']} -o jsonpath={jsonpath}")
+            if error_count != '' and 'Error' not in error_count and int(error_count) > 0:
+                oadp_velero_log = os.path.join(self._run_artifacts_path, f'{cr_name}-error-and-warning-summary.log')
+                if self.__test_env['source'] == 'upstream':
+                    warnings_and_errors = self.__ssh.run(
+                        cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero {cr_type} logs {cr_name} -n {self.__test_env['velero_ns']} | grep 'warn\|error\|critical\|exception'")
+                    self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero {cr_type} logs {cr_name} -n {self.__test_env['velero_ns']} | grep 'warn\|error\|critical\|exception' >> {oadp_velero_log}")
+                else:
+                    warnings_and_errors = self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero {cr_type} logs {cr_name} --insecure-skip-tls-verify | grep 'warn\|error\|critical\|exception'")
+                    self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero {cr_type} logs {cr_name} --insecure-skip-tls-verify | grep 'warn\|error\|critical\|exception' >> {oadp_velero_log}")
+                logger.info(f":: INFO ::  validate_oadp_cr :: reports the following {error_count} errors and warnings for {cr_name} ")
+                logger.warn(f":: WARN ::  {cr_name} log showed: {warnings_and_errors}")
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
 
     @logger_time_stamp
@@ -2475,57 +2566,66 @@ class OadpWorkloads(WorkloadsOperations):
         method saves velero log to self.__artifactdir
         save CR, velero logs
         """
-        oadp_cr_log = os.path.join(self._run_artifacts_path, 'oadp-cr.json')
-        oadp_velero_log = os.path.join(self._run_artifacts_path, 'oadp-velero.log')
-        if self.__test_env['source'] == 'upstream':
-            self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero {cr_type} logs {cr_name} -n {self.__test_env['velero_ns']} >> {oadp_velero_log}")
-        else:
-            self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero {cr_type} logs {cr_name} --insecure-skip-tls-verify >> {oadp_velero_log}")
-        if os.path.exists(os.path.join(oadp_velero_log)) or os.stat(oadp_velero_log).st_size == 0:
-            #todo warn file artifact creation had an issue
-            logger.warn(f'oadp_velero_log is either not present or empty check file path: {oadp_velero_log}')
-        self.__ssh.run(cmd=f"oc get {cr_type} {cr_name} -n {self.__test_env['velero_ns']} -o json >> {oadp_cr_log}")
+        try:
 
-        if os.path.exists(os.path.join(oadp_cr_log)) or os.stat(oadp_cr_log).st_size == 0:
-            #todo warn file artifact creation had an issue
-            logger.warn(f'oadp_cr_log is either not present or empty check file path: {oadp_cr_log}')
+            oadp_cr_log = os.path.join(self._run_artifacts_path, 'oadp-cr.json')
+            oadp_velero_log = os.path.join(self._run_artifacts_path, 'oadp-velero.log')
+            if self.__test_env['source'] == 'upstream':
+                self.__ssh.run(cmd=f"cd {self.__test_env['velero_cli_path']}/velero/cmd/velero; ./velero {cr_type} logs {cr_name} -n {self.__test_env['velero_ns']} >> {oadp_velero_log}")
+            else:
+                self.__ssh.run(cmd=f"oc -n {self.__test_env['velero_ns']} exec deployment/velero -c velero -it -- ./velero {cr_type} logs {cr_name} --insecure-skip-tls-verify >> {oadp_velero_log}")
+            if os.path.exists(os.path.join(oadp_velero_log)) or os.stat(oadp_velero_log).st_size == 0:
+                #todo warn file artifact creation had an issue
+                logger.warn(f'oadp_velero_log is either not present or empty check file path: {oadp_velero_log}')
+            self.__ssh.run(cmd=f"oc get {cr_type} {cr_name} -n {self.__test_env['velero_ns']} -o json >> {oadp_cr_log}")
+
+            if os.path.exists(os.path.join(oadp_cr_log)) or os.stat(oadp_cr_log).st_size == 0:
+                #todo warn file artifact creation had an issue
+                logger.warn(f'oadp_cr_log is either not present or empty check file path: {oadp_cr_log}')
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
     @logger_time_stamp
     def oadp_execute_scenario(self, test_scenario, run_method):
         """
         method executes workload
         """
-        namespaces_to_backup = self.ds_get_all_namespaces()
-        if len(namespaces_to_backup) > 1:
-            namespaces_to_backup = ','.join(namespaces_to_backup)
-        if len(namespaces_to_backup) == 1:
-            namespaces_to_backup = str(namespaces_to_backup[0])
-        logger.info(f"### INFO ### oadp_execute_scenario: Namespaces involved are: {namespaces_to_backup} ")
-        if run_method == 'ansible':
-            print("invoking via ansible")
-            ansible_args = f"test=1 testcase={test_scenario['testcase']} plugin={test_scenario['args']['plugin']} use_cli={test_scenario['args']['use_cli']} OADP_CR_TYPE={test_scenario['args']['OADP_CR_TYPE']} OADP_CR_NAME={test_scenario['args']['OADP_CR_NAME']} backup_name={test_scenario['args']['backup_name']} namespaces_to_backup={namespaces_to_backup} result_dir_base_path={test_scenario['result_dir_base_path']}"
-            self.__ssh.run(cmd=f'ansible-playbook {self.__oadp_base_dir}/test-oadp.yaml -e "{ansible_args}" -vv')
+        try:
 
-        if run_method == 'python':
-            if test_scenario['args']['OADP_CR_TYPE'] == 'backup':
-                self.oadp_timer(action="start", transaction_name=f"{test_scenario['args']['OADP_CR_NAME']}")
-                self.exec_backup(plugin=test_scenario['args']['plugin'],
-                                 backup_name=test_scenario['args']['backup_name'],
-                                 namespaces_to_backup=namespaces_to_backup)
-                self.wait_for_condition_of_cr(cr_type=test_scenario['args']['OADP_CR_TYPE'],
-                                              cr_name=test_scenario['args']['OADP_CR_NAME'],
-                                              testcase_timeout=test_scenario['args']['testcase_timeout'])
-                self.oadp_timer(action="stop", transaction_name=f"{test_scenario['args']['OADP_CR_NAME']}")
-            if test_scenario['args']['OADP_CR_TYPE'] == 'restore':
-                self.oadp_timer(action="start", transaction_name=f"{test_scenario['args']['OADP_CR_NAME']}")
-                self.exec_restore(plugin=test_scenario['args']['plugin'],
-                                  restore_name=test_scenario['args']['OADP_CR_NAME'],
-                                  backup_name=test_scenario['args']['backup_name'])
-                self.wait_for_condition_of_cr(cr_type=test_scenario['args']['OADP_CR_TYPE'],
-                                              cr_name=test_scenario['args']['OADP_CR_NAME'],
-                                              testcase_timeout=test_scenario['args']['testcase_timeout'])
-                self.oadp_timer(action="stop", transaction_name=f"{test_scenario['args']['OADP_CR_NAME']}")
+            namespaces_to_backup = self.ds_get_all_namespaces()
+            if len(namespaces_to_backup) > 1:
+                namespaces_to_backup = ','.join(namespaces_to_backup)
+            if len(namespaces_to_backup) == 1:
+                namespaces_to_backup = str(namespaces_to_backup[0])
+            logger.info(f"### INFO ### oadp_execute_scenario: Namespaces involved are: {namespaces_to_backup} ")
+            if run_method == 'ansible':
+                print("invoking via ansible")
+                ansible_args = f"test=1 testcase={test_scenario['testcase']} plugin={test_scenario['args']['plugin']} use_cli={test_scenario['args']['use_cli']} OADP_CR_TYPE={test_scenario['args']['OADP_CR_TYPE']} OADP_CR_NAME={test_scenario['args']['OADP_CR_NAME']} backup_name={test_scenario['args']['backup_name']} namespaces_to_backup={namespaces_to_backup} result_dir_base_path={test_scenario['result_dir_base_path']}"
+                self.__ssh.run(cmd=f'ansible-playbook {self.__oadp_base_dir}/test-oadp.yaml -e "{ansible_args}" -vv')
 
+            if run_method == 'python':
+                if test_scenario['args']['OADP_CR_TYPE'] == 'backup':
+                    self.oadp_timer(action="start", transaction_name=f"{test_scenario['args']['OADP_CR_NAME']}")
+                    self.exec_backup(plugin=test_scenario['args']['plugin'],
+                                     backup_name=test_scenario['args']['backup_name'],
+                                     namespaces_to_backup=namespaces_to_backup)
+                    self.wait_for_condition_of_cr(cr_type=test_scenario['args']['OADP_CR_TYPE'],
+                                                  cr_name=test_scenario['args']['OADP_CR_NAME'],
+                                                  testcase_timeout=test_scenario['args']['testcase_timeout'])
+                    self.oadp_timer(action="stop", transaction_name=f"{test_scenario['args']['OADP_CR_NAME']}")
+                if test_scenario['args']['OADP_CR_TYPE'] == 'restore':
+                    self.oadp_timer(action="start", transaction_name=f"{test_scenario['args']['OADP_CR_NAME']}")
+                    self.exec_restore(plugin=test_scenario['args']['plugin'],
+                                      restore_name=test_scenario['args']['OADP_CR_NAME'],
+                                      backup_name=test_scenario['args']['backup_name'])
+                    self.wait_for_condition_of_cr(cr_type=test_scenario['args']['OADP_CR_TYPE'],
+                                                  cr_name=test_scenario['args']['OADP_CR_NAME'],
+                                                  testcase_timeout=test_scenario['args']['testcase_timeout'])
+                    self.oadp_timer(action="stop", transaction_name=f"{test_scenario['args']['OADP_CR_NAME']}")
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
 
     @logger_time_stamp
@@ -2731,21 +2831,25 @@ class OadpWorkloads(WorkloadsOperations):
 
     def ds_get_all_storageclass(self, scenario):
         # Return a list of all unique sc in scenario_datasets
+        try:
 
-        if isinstance(scenario['dataset'], dict):
-            sc_list = []
-            sc_list.append(scenario['dataset']['sc'])
-            return sc_list
-        if isinstance(scenario['dataset'], list):
-            unique_sc_list = set()
-            for s in self.__scenario_datasets:
-                datasets = s.get('list_of_datasets_which_belong_to_this_namespace', [])
-                for dataset in datasets:
-                    sc = dataset.get('sc')
-                    if sc:
-                        unique_sc_list.add(sc)
-            return list(unique_sc_list)
+            if isinstance(scenario['dataset'], dict):
+                sc_list = []
+                sc_list.append(scenario['dataset']['sc'])
+                return sc_list
+            if isinstance(scenario['dataset'], list):
+                unique_sc_list = set()
+                for s in self.__scenario_datasets:
+                    datasets = s.get('list_of_datasets_which_belong_to_this_namespace', [])
+                    for dataset in datasets:
+                        sc = dataset.get('sc')
+                        if sc:
+                            unique_sc_list.add(sc)
+                return list(unique_sc_list)
 
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
     def ds_get_datasets_for_namespace_with_status(self, namespace, exists=None, validated=None):
         # Return datasets for the specified namespace with optional filtering by 'exists' and 'validated'
         datasets = next((s['list_of_datasets_which_belong_to_this_namespace'] for s in self.__scenario_datasets
@@ -2803,45 +2907,49 @@ class OadpWorkloads(WorkloadsOperations):
         2) as a list item in the updated format
         3) self.__oadp_ds_failing_validation will contain datasets which aren't valid
         """
-        dataset_value = scenario.get('dataset')
-        if isinstance(dataset_value, list):
-            logger.info("### INFO ### validate_expected_datasets identified dataset in list format")
-            total_ds = len(scenario['dataset'])
-            validated = 0
-            validations_attempted = 0
-            datasets_as_json = json.dumps(scenario['dataset'], indent=4, sort_keys=False)
-            logger.info(f"The following datasets are defined: {datasets_as_json} ")
-            for ds in scenario['dataset']:
-                logger.info(f"### INFO ### validate_expected_datasets attempting to validate dataset {validations_attempted} of {total_ds} ")
-                logger.info(f"### INFO ### validate_expected_datasets for {ds['namespace']} with {ds}")
+        try:
+
+            dataset_value = scenario.get('dataset')
+            if isinstance(dataset_value, list):
+                logger.info("### INFO ### validate_expected_datasets identified dataset in list format")
+                total_ds = len(scenario['dataset'])
+                validated = 0
+                validations_attempted = 0
+                datasets_as_json = json.dumps(scenario['dataset'], indent=4, sort_keys=False)
+                logger.info(f"The following datasets are defined: {datasets_as_json} ")
+                for ds in scenario['dataset']:
+                    logger.info(f"### INFO ### validate_expected_datasets attempting to validate dataset {validations_attempted} of {total_ds} ")
+                    logger.info(f"### INFO ### validate_expected_datasets for {ds['namespace']} with {ds}")
+                    validation_status = self.validate_dataset(scenario, ds)
+                    logger.info(f"### INFO ### validate_expected_datasets shows status: {validation_status} for {ds['namespace']}")
+                    if validation_status:
+                        validated = validated + 1
+                    else:
+                        self.__oadp_ds_failing_validation.append(ds)
+                        logger.warning(f"### WARN ### DS validation for dataset was not successful for ns {ds['namespace']} the dataset details are: {ds}")
+                    validations_attempted = validations_attempted + 1
+                if validated != total_ds:
+                    logger.warning(f"### ERROR ### validate_expected_datasets: Datasets validated: {validated} expected to validate: {total_ds} validation were: {self.__oadp_ds_failing_validation}")
+                    self.log_this(level='warning', msg=f'validate_expected_datasets: Datasets validated: {validated} expected to validate: {total_ds} validation were:', obj_to_json=self.__oadp_ds_failing_validation)
+                    return False
+                else:
+                    logger.info(f"### INFO ### validate_expected_datasets: Validation has completed successfully for {validated} datasets of {total_ds} validations were successful")
+                    return True
+            else:
+                ds = scenario['dataset']
+                # Handle legacy/dict formating where 'namespace' wouldn't exist but namespaces_to_backup does
+                ds['namespace'] = scenario['args']['namespaces_to_backup']
+                logger.info(f"### INFO ### validate_expected_datasets for {ds['namespace']} with {ds} - legacy format using dict detected")
                 validation_status = self.validate_dataset(scenario, ds)
-                logger.info(f"### INFO ### validate_expected_datasets shows status: {validation_status} for {ds['namespace']}")
                 if validation_status:
-                    validated = validated + 1
+                    logger.info(f"### INFO ### validate_expected_datasets status: {validation_status} for {ds['namespace']} validations was successful")
                 else:
                     self.__oadp_ds_failing_validation.append(ds)
-                    logger.warning(f"### WARN ### DS validation for dataset was not successful for ns {ds['namespace']} the dataset details are: {ds}")
-                validations_attempted = validations_attempted + 1
-            if validated != total_ds:
-                logger.warning(f"### ERROR ### validate_expected_datasets: Datasets validated: {validated} expected to validate: {total_ds} validation were: {self.__oadp_ds_failing_validation}")
-                self.log_this(level='warning', msg=f'validate_expected_datasets: Datasets validated: {validated} expected to validate: {total_ds} validation were:', obj_to_json=self.__oadp_ds_failing_validation)
-                return False
-            else:
-                logger.info(f"### INFO ### validate_expected_datasets: Validation has completed successfully for {validated} datasets of {total_ds} validations were successful")
-                return True
-        else:
-            ds = scenario['dataset']
-            # Handle legacy/dict formating where 'namespace' wouldn't exist but namespaces_to_backup does
-            ds['namespace'] = scenario['args']['namespaces_to_backup']
-            logger.info(f"### INFO ### validate_expected_datasets for {ds['namespace']} with {ds} - legacy format using dict detected")
-            validation_status = self.validate_dataset(scenario, ds)
-            if validation_status:
-                logger.info(f"### INFO ### validate_expected_datasets status: {validation_status} for {ds['namespace']} validations was successful")
-            else:
-                self.__oadp_ds_failing_validation.append(ds)
-                logger.warning(f"### WARN ### validate_expected_datasets status: {validation_status} for {ds['namespace']} validation has FAILED")
-            return validation_status
-
+                    logger.warning(f"### WARN ### validate_expected_datasets status: {validation_status} for {ds['namespace']} validation has FAILED")
+                return validation_status
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
     @logger_time_stamp
     def validate_dataset(self, scenario, ds):
         """
@@ -2993,12 +3101,16 @@ class OadpWorkloads(WorkloadsOperations):
         return True
 
     def set_validation_retry_logic(self, interval_between_checks, max_attempts):
+        try:
 
-        self.__retry_logic = {
-            'interval_between_checks': interval_between_checks,
-            'max_attempts': max_attempts
-        }
-        logger.info(f"### INFO ### set_validation_retry_logic: Set interval_between_checks: {self.__retry_logic['interval_between_checks']} Set max_attempts: {self.__retry_logic['max_attempts']}")
+            self.__retry_logic = {
+                'interval_between_checks': interval_between_checks,
+                'max_attempts': max_attempts
+            }
+            logger.info(f"### INFO ### set_validation_retry_logic: Set interval_between_checks: {self.__retry_logic['interval_between_checks']} Set max_attempts: {self.__retry_logic['max_attempts']}")
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
     @logger_time_stamp
     def remove_previous_run_report(self):
@@ -3060,8 +3172,13 @@ class OadpWorkloads(WorkloadsOperations):
         """
         helper function to return bool if its downstream
         """
-        if self.__test_env['source'] != 'upstream':
-            return True
+        try:
+
+            if self.__test_env['source'] != 'upstream':
+                return True
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
     @logger_time_stamp
     def invoke_log_collection(self, scenario):
@@ -3069,25 +3186,29 @@ class OadpWorkloads(WorkloadsOperations):
         method invokes misc-scripts/benchmark-runner-wrapper/log_collector.sh
         required to pass crname from tests.yaml
         """
+        try:
 
-        log_collector_sh = (f"{self.__oadp_misc_dir}/benchmark-runner-wrapper/log_collector.sh")
-        cr_name = scenario['args']['OADP_CR_NAME']
-        logger.info(f"invoke_log_collection is attempting to collect logs from cr: {cr_name} and write logs to dir: {self._run_artifacts_path}")
-        log_collection_output = self.__ssh.run(cmd=f"{log_collector_sh} {cr_name} --enable-collect-events --logs-folder {self._run_artifacts_path}")
-        logger.info(f"log_collection_output: {log_collection_output}")
+            log_collector_sh = (f"{self.__oadp_misc_dir}/benchmark-runner-wrapper/log_collector.sh")
+            cr_name = scenario['args']['OADP_CR_NAME']
+            logger.info(f"invoke_log_collection is attempting to collect logs from cr: {cr_name} and write logs to dir: {self._run_artifacts_path}")
+            log_collection_output = self.__ssh.run(cmd=f"{log_collector_sh} {cr_name} --enable-collect-events --logs-folder {self._run_artifacts_path}")
+            logger.info(f"log_collection_output: {log_collection_output}")
 
-        logger.info(f"Getting the list of file names that exist in {self._run_artifacts_path} folder")
-        list_of_files = list(self.__ssh.run(cmd=f"find {self._run_artifacts_path} -type f").splitlines())
-        logger.info(f"{list_of_files}")
+            logger.info(f"Getting the list of file names that exist in {self._run_artifacts_path} folder")
+            list_of_files = list(self.__ssh.run(cmd=f"find {self._run_artifacts_path} -type f").splitlines())
+            logger.info(f"{list_of_files}")
 
-        logger.info(f"Check if log_collector.sh executed")
-        if len(list_of_files) < 10:
-            logger.error(f"ERROR: log_collector.sh script wasn't running. Total files: {len(list_of_files)}")
+            logger.info(f"Check if log_collector.sh executed")
+            if len(list_of_files) < 10:
+                logger.error(f"ERROR: log_collector.sh script wasn't running. Total files: {len(list_of_files)}")
 
-        logger.info(f"Check if file size is zero")
-        for i in range(len(list_of_files)):
-            if os.stat(list_of_files[i]).st_size == 0:
-              logger.error(f"ERROR: invoke_log_collection, The file size of: {list_of_files[i]} is 0 bytes")
+            logger.info(f"Check if file size is zero")
+            for i in range(len(list_of_files)):
+                if os.stat(list_of_files[i]).st_size == 0:
+                  logger.error(f"ERROR: invoke_log_collection, The file size of: {list_of_files[i]} is 0 bytes")
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
     @logger_time_stamp
     def run_workload(self):
@@ -3255,24 +3376,30 @@ class OadpWorkloads(WorkloadsOperations):
         """
         methodfinalize removes oapd CR or dataset if set via CLI option
         """
-        if self.__oadp_cleanup_cr_post_run:
-            if 'restore' == scenario['testtype']:
-                logger.info(f"*** Attempting post run: clean up for {scenario['args']['OADP_CR_NAME']} that is a {scenario['testtype']} relevant CRs to remove are: restore: {scenario['args']['OADP_CR_NAME']} & relevant CRs related backup CR: {scenario['args']['backup_name']} ")
-                self.delete_oadp_custom_resources( ns=self.__test_env['velero_ns'], cr_type=scenario['args']['OADP_CR_TYPE'], cr_name=scenario['args']['OADP_CR_NAME'])
-                self.delete_oadp_custom_resources(ns=self.__test_env['velero_ns'], cr_type='backup', cr_name=scenario['args']['backup_name'])
-                self.clean_s3_bucket(scenario=scenario, oadp_namespace=self.__test_env['velero_ns'])
-                self.delete_vsc(scenario=scenario, ns_scoped=False)
-                self.clean_odf_pool(scenario=scenario)
-            if 'backup' == scenario['testtype']:
-                logger.info(f"*** Attempting post run: clean up for {scenario['args']['OADP_CR_NAME']} that is a {scenario['testtype']} relevant CRs to remove are: {scenario['args']['OADP_CR_NAME']}")
-                self.delete_oadp_custom_resources(self.__test_env['velero_ns'],cr_type=scenario['args']['OADP_CR_TYPE'],cr_name=scenario['args']['OADP_CR_NAME'])
-        else:
-            logger.info(f'*** Skipping post run cleaning up of OADP CR *** as self.__oadp_cleanup_cr_post_run: {self.__oadp_cleanup_cr_post_run}')
-        if self.__oadp_cleanup_dataset_post_run:
-            logger.info(f'*** Attempting post run: clean up of OADP dataset *** as self.__oadp_cleanup_dataset_post_run: {self.__oadp_cleanup_dataset_post_run}')
-            self.delete_source_dataset(target_namespace=scenario['args']['namespaces_to_backup'])
-        else:
-            logger.info(f'*** Skipping post run cleaning up of OADP dataset  *** as self.__oadp_cleanup_dataset_post_run: {self.__oadp_cleanup_dataset_post_run}')
+        try:
+
+            if self.__oadp_cleanup_cr_post_run:
+                if 'restore' == scenario['testtype']:
+                    logger.info(f"*** Attempting post run: clean up for {scenario['args']['OADP_CR_NAME']} that is a {scenario['testtype']} relevant CRs to remove are: restore: {scenario['args']['OADP_CR_NAME']} & relevant CRs related backup CR: {scenario['args']['backup_name']} ")
+                    self.delete_oadp_custom_resources( ns=self.__test_env['velero_ns'], cr_type=scenario['args']['OADP_CR_TYPE'], cr_name=scenario['args']['OADP_CR_NAME'])
+                    self.delete_oadp_custom_resources(ns=self.__test_env['velero_ns'], cr_type='backup', cr_name=scenario['args']['backup_name'])
+                    self.clean_s3_bucket(scenario=scenario, oadp_namespace=self.__test_env['velero_ns'])
+                    self.delete_vsc(scenario=scenario, ns_scoped=False)
+                    self.clean_odf_pool(scenario=scenario)
+                if 'backup' == scenario['testtype']:
+                    logger.info(f"*** Attempting post run: clean up for {scenario['args']['OADP_CR_NAME']} that is a {scenario['testtype']} relevant CRs to remove are: {scenario['args']['OADP_CR_NAME']}")
+                    self.delete_oadp_custom_resources(self.__test_env['velero_ns'],cr_type=scenario['args']['OADP_CR_TYPE'],cr_name=scenario['args']['OADP_CR_NAME'])
+            else:
+                logger.info(f'*** Skipping post run cleaning up of OADP CR *** as self.__oadp_cleanup_cr_post_run: {self.__oadp_cleanup_cr_post_run}')
+            if self.__oadp_cleanup_dataset_post_run:
+                logger.info(f'*** Attempting post run: clean up of OADP dataset *** as self.__oadp_cleanup_dataset_post_run: {self.__oadp_cleanup_dataset_post_run}')
+                self.delete_source_dataset(target_namespace=scenario['args']['namespaces_to_backup'])
+            else:
+                logger.info(f'*** Skipping post run cleaning up of OADP dataset  *** as self.__oadp_cleanup_dataset_post_run: {self.__oadp_cleanup_dataset_post_run}')
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
+
 
     def capacity_in_bytes(self, storage_str):
         """
@@ -3323,23 +3450,29 @@ class OadpWorkloads(WorkloadsOperations):
 
     @logger_time_stamp
     def generate_elastic_index(self, scenario):
-        '''
+        """
         method creates elastic index name based on test_scenario data
-        '''
-        index_prefix = ''
-        if self.__test_env['source'] == 'upstream':
-            index_prefix = 'velero-'
-        else:
-            index_prefix = 'oadp-'
-        total_namespaces = self.ds_get_all_namespaces()
-        index_name = f'{index_prefix}' + scenario['testtype'] + '-' + 'single-namespace'
-        # if scenario['dataset']['total_namespaces'] == 1:
-        #     index_name = f'{index_prefix}' + scenario['testtype'] + '-' + 'single-namespace'
-        # elif scenario['dataset']['total_namespaces'] > 1:
-        #         index_name = f'{index_prefix}' + scenario['testtype'] + '-' + 'multi-namespace'
-        logger.info(f':: INFO :: ELK index name is: {index_name}')
-        self.__run_metadata['index'] = index_name
-        return index_name
+        """
+        try:
+
+            index_prefix = ''
+            if self.__test_env['source'] == 'upstream':
+                index_prefix = 'velero-'
+            else:
+                index_prefix = 'oadp-'
+            total_namespaces = self.ds_get_all_namespaces()
+            index_name = f'{index_prefix}' + scenario['testtype'] + '-' + 'single-namespace'
+            # if scenario['dataset']['total_namespaces'] == 1:
+            #     index_name = f'{index_prefix}' + scenario['testtype'] + '-' + 'single-namespace'
+            # elif scenario['dataset']['total_namespaces'] > 1:
+            #         index_name = f'{index_prefix}' + scenario['testtype'] + '-' + 'multi-namespace'
+            logger.info(f':: INFO :: ELK index name is: {index_name}')
+            self.__run_metadata['index'] = index_name
+            return index_name
+
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
 
     @logger_time_stamp
