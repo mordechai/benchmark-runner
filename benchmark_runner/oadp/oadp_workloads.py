@@ -40,8 +40,8 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'backup-restic-busybox-perf-single-1000-pods-cephrbd' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vbd-pvc-util-minio-6g'
-        self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
+        self.__oadp_scenario_name = 'backup-10pod-kopia-pvc-util-0-0-7-cephrbd-6g' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vbd-pvc-util-minio-6g'
+        # self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
@@ -2721,7 +2721,7 @@ class OadpWorkloads(WorkloadsOperations):
         return total_pods
 
     @logger_time_stamp
-    def calc_total_pods_per_namespace_in_datasets(self, scenario, namespace):
+    def calc_total_backup_size_per_namespace(self, scenario, namespace):
         """
         Calculate the total number of pods per namespace.
 
@@ -3180,6 +3180,31 @@ class OadpWorkloads(WorkloadsOperations):
             self.fail_test_run(f" {err} occurred in " + self.get_current_function())
             raise err
 
+    def verify_datsets_before_backups(self, test_scenario):
+        """
+        method handles validation calls, and dataset creation calls before backups
+        """
+        try:
+            # setting retry logic for initial dataset presence check to be quick
+            self.set_validation_retry_logic(interval_between_checks=5, max_attempts=1)
+            dataset_already_present = self.validate_expected_datasets(test_scenario)
+            if not dataset_already_present:
+                self.set_validation_retry_logic(interval_between_checks=15, max_attempts=28)
+                logger.info(
+                    f" dataset_already_present: {dataset_already_present} and  self.__oadp_ds_failing_validation {self.__oadp_ds_failing_validation} ")
+                for ds in self.__oadp_ds_failing_validation:
+                    self.create_source_dataset(test_scenario, ds)
+                dataset_created_as_expected = self.validate_expected_datasets(test_scenario)
+                self.__run_metadata['summary']['results']['dataset_created_as_expected'] = dataset_created_as_expected
+                if not dataset_created_as_expected:
+                    logger.exception(f"Creation of Dataset for {test_scenario['args']['OADP_CR_NAME']} did not pass validations  BEFORE the backup will be taken for  {test_scenario}")
+                else:
+                    logger.info(f'Dataset post creation validations are {dataset_created_as_expected}')
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
+
+
     @logger_time_stamp
     def invoke_log_collection(self, scenario):
         """
@@ -3257,14 +3282,7 @@ class OadpWorkloads(WorkloadsOperations):
        # when performing backup
        # Check if source namespace aka our dataset is preseent, if dataset not prsent then create it
        if test_scenario['args']['OADP_CR_TYPE'] == 'backup':
-           # setting retry logic for initial dataset presence check to be quick
-           self.set_validation_retry_logic(interval_between_checks=5,max_attempts=1)
-           dataset_already_present = self.validate_expected_datasets(test_scenario)
-           if not dataset_already_present:
-               self.set_validation_retry_logic(interval_between_checks=15, max_attempts=28)
-               logger.info(f" dataset_already_present: {dataset_already_present} and  self.__oadp_ds_failing_validation {self.__oadp_ds_failing_validation} ")
-               for ds in self.__oadp_ds_failing_validation:
-                   self.create_source_dataset(test_scenario,ds)
+           self.verify_datsets_before_backups(test_scenario)
 
        # when performing restore
        # source dataset will be removed before restore attempt unless dataset yaml contains ['args']['existingResourcePolicy'] set to 'Update'
