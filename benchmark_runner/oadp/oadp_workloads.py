@@ -40,7 +40,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'backup-10pod-kopia-pvc-util-0-0-7-cephrbd-6g' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vbd-pvc-util-minio-6g'
+        # self.__oadp_scenario_name = 'restore-10pod-kopia-pvc-util-0-0-7-cephrbd-6g' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vbd-pvc-util-minio-6g'
         self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
@@ -400,58 +400,130 @@ class OadpWorkloads(WorkloadsOperations):
             self.fail_test_run(f" {err} occurred in " + self.get_current_function())
             raise err
 
+    def validate_podvolumerestores(self, scenario):
+
+        try:
+
+            import json
+            from datetime import datetime
+            cr_restore_name = scenario['args']['OADP_CR_NAME']
+
+            data = self.get_oc_resource_to_json(resource_type='podvolumerestore', resource_name='',
+                                                namespace=self.__test_env['velero_ns'])
+            # Initialize variables
+            total_completed_pvr = 0
+            total_failed_pvr = 0
+            pvr_durations = {}
+
+            # Iterate through each PodVolumeRestore item
+            for item in data['items']:
+                restore_name = item['metadata'].get('labels', {}).get('velero.io/restore-name')
+                status_phase = item['status'].get('phase')
+
+                # Check if conditions are met
+                if restore_name == cr_restore_name:
+                    if status_phase == "Completed":
+                        total_completed_pvr += 1
+
+                        # Calculate duration
+                        start_time = datetime.strptime(item['status']['startTimestamp'], '%Y-%m-%dT%H:%M:%SZ')
+                        end_time = datetime.strptime(item['status']['completionTimestamp'], '%Y-%m-%dT%H:%M:%SZ')
+                        duration = (end_time - start_time).total_seconds()
+
+                        # Store in durations dictionary
+                        pvr_durations[restore_name] = pvr_durations.get(restore_name, []) + [duration]
+                    elif status_phase != "Completed" or 'progress' in item['status']:
+                        total_failed_pvr += 1
+                        print(f"Failed PVR: {item}")  # Print the item details
+
+            # Calculate statistics for completed PVRs
+            if pvr_durations:
+                for restore_name, durations in pvr_durations.items():
+                    max_duration = max(durations)
+                    min_duration = min(durations)
+                    avg_duration = sum(durations) / len(durations)
+
+                    # Update the dictionary with statistics
+                    pvr_durations[restore_name] = {
+                        'max': max_duration,
+                        'min': min_duration,
+                        'avg': avg_duration
+                    }
+
+            # Add totals to the durations dictionary
+            pvr_durations['total_completed_pvr'] = total_completed_pvr
+            pvr_durations['total_failed_pvr'] = total_failed_pvr
+
+            print(pvr_durations)
+            del pvr_durations['durations']
+            self.__run_metadata['summary']['results']['podvolumerestores'].update(pvr_durations)
+
+            if pvr_durations['total_failed_pvr'] != 0:
+                self.__run_metadata['summary']['validations']['podvolumerestore_post_run_validation'] = 'FAIL'
+            else:
+                self.__run_metadata['summary']['validations']['podvolumerestore_post_run_validation'] = 'PASS'
+
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
+
     def validate_podvolumebackups(self, scenario):
         """
         """
-        import json
-        from datetime import datetime
-        backup = 'backup-10pod-kopia-pvc-util-0-0-7-cephrbd-6g'
+        try:
 
-        data = self.get_oc_resource_to_json(resource_type='podvolumebackup', resource_name='',namespace=self.__test_env['velero_ns'])
-        # Initialize variables
-        total_completed_pvb = 0
-        total_failed_pvb = 0
-        pvb_durations = {}
+            import json
+            from datetime import datetime
+            cr_backup_name = scenario['args']['OADP_CR_NAME']
 
-        # Iterate through the PodVolumeBackup items
-        for item in data['items']:
-            if item['spec']['tags']['backup'] == f"{backup}":
-                if item['status']['phase'] == "Completed":
-                    total_completed_pvb += 1
+            data = self.get_oc_resource_to_json(resource_type='podvolumebackup', resource_name='',namespace=self.__test_env['velero_ns'])
+            # Initialize variables
+            total_completed_pvb = 0
+            total_failed_pvb = 0
+            pvb_durations = {}
 
-                    # Calculate duration
-                    start_time = datetime.strptime(item['status']['startTimestamp'], '%Y-%m-%dT%H:%M:%SZ')
-                    end_time = datetime.strptime(item['status']['completionTimestamp'], '%Y-%m-%dT%H:%M:%SZ')
-                    duration_seconds = (end_time - start_time).total_seconds()
+            # Iterate through the PodVolumeBackup items
+            for item in data['items']:
+                if item['spec']['tags']['backup'] == cr_backup_name:
+                    if item['status']['phase'] == "Completed":
+                        total_completed_pvb += 1
 
-                    # Store in durations dictionary
-                    pvb_durations.setdefault('durations', []).append(duration_seconds)
-                else:
-                    total_failed_pvb += 1
-                    print("Failed PVB:")
-                    print(item)  # Print the details of the failed item
+                        # Calculate duration
+                        start_time = datetime.strptime(item['status']['startTimestamp'], '%Y-%m-%dT%H:%M:%SZ')
+                        end_time = datetime.strptime(item['status']['completionTimestamp'], '%Y-%m-%dT%H:%M:%SZ')
+                        duration_seconds = (end_time - start_time).total_seconds()
 
-        # Calculate max, min, average durations
-        if pvb_durations:
-            pvb_durations['max'] = max(pvb_durations['durations'])
-            pvb_durations['min'] = min(pvb_durations['durations'])
-            pvb_durations['avg'] = sum(pvb_durations['durations']) / len(pvb_durations['durations'])
+                        # Store in durations dictionary
+                        pvb_durations.setdefault('durations', []).append(duration_seconds)
+                    else:
+                        total_failed_pvb += 1
+                        print("Failed PVB:")
+                        print(item)  # Print the details of the failed item
 
-        del pvb_durations['durations']
+            # Calculate max, min, average durations
+            if pvb_durations:
+                pvb_durations['max'] = max(pvb_durations['durations'])
+                pvb_durations['min'] = min(pvb_durations['durations'])
+                pvb_durations['avg'] = sum(pvb_durations['durations']) / len(pvb_durations['durations'])
 
-        # Update with total counts
-        pvb_durations['total_completed_pvb'] = total_completed_pvb
-        pvb_durations['total_failed_pvb'] = total_failed_pvb
+            del pvb_durations['durations']
 
-        self.__run_metadata['summary']['results']['podvolumebackups'].update(pvb_durations)
+            # Update with total counts
+            pvb_durations['total_completed_pvb'] = total_completed_pvb
+            pvb_durations['total_failed_pvb'] = total_failed_pvb
 
-        if pvb_durations['total_failed_pvb'] != 0:
-            self.__run_metadata['summary']['validations']['podvolumebackup_post_run_validation'] = 'FAIL'
-        else:
-            self.__run_metadata['summary']['validations']['podvolumebackup_post_run_validation'] = 'PASS'
+            self.__run_metadata['summary']['results']['podvolumebackups'].update(pvb_durations)
 
-        # Print the results
-        print(pvb_durations)
+            if pvb_durations['total_failed_pvb'] != 0:
+                self.__run_metadata['summary']['validations']['podvolumebackup_post_run_validation'] = 'FAIL'
+            else:
+                self.__run_metadata['summary']['validations']['podvolumebackup_post_run_validation'] = 'PASS'
+
+            # Print the results
+            print(pvb_durations)
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
     @logger_time_stamp
     def get_noobaa_version_details(self):
@@ -3388,6 +3460,7 @@ class OadpWorkloads(WorkloadsOperations):
        self.get_dataset_details(scenario=test_scenario)
 
 
+
        # # Verify no left over test results
        self.remove_previous_run_report()
 
@@ -3470,8 +3543,10 @@ class OadpWorkloads(WorkloadsOperations):
        self.validate_cr(ns=self.__test_env['velero_ns'], cr_type=test_scenario['args']['OADP_CR_TYPE'],cr_name=test_scenario['args']['OADP_CR_NAME'])
 
        # Post Execution Validate PVB or PVR
-       if test_scenario['args']['OADP_CR_TYPE'] == 'backup':
+       if test_scenario['args']['OADP_CR_TYPE'] == 'backup' and test_scenario['args']['plugin'] != 'vbd':
            self.validate_podvolumebackups(test_scenario)
+       if test_scenario['args']['OADP_CR_TYPE'] == 'restore' and test_scenario['args']['plugin'] != 'vbd':
+           self.validate_podvolumerestores(test_scenario)
 
        if self.__oadp_resource_collection:
            # Get Pod Resource after the test
