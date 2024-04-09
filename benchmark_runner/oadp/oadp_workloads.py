@@ -40,8 +40,8 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        self.__oadp_scenario_name = 'backup-10pod-kopia-pvc-util-0-0-7-cephrbd-6g' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vbd-pvc-util-minio-6g'
-        # self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
+        # self.__oadp_scenario_name = 'backup-csi-datagen-multi-ns-sanity-cephrbd' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vbd-pvc-util-minio-6g'
+        self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
         self.__oadp_cleanup_dataset_post_run = self._environment_variables_dict.get('oadp_cleanup_dataset', False)
@@ -82,6 +82,7 @@ class OadpWorkloads(WorkloadsOperations):
                 },
                 "runtime": {},
                 "results": {},
+                "validations": {},
                 "resources": {
                     "nodes": {},
                     "run_time_pods": [],
@@ -350,19 +351,19 @@ class OadpWorkloads(WorkloadsOperations):
             if minio_deployed_locally !='':
                 bucket_details['bucket']['minio_deployed_locally'] = minio_deployed_locally
 
-            if endpoint !='':
+            if endpoint != '':
                 bucket_details['bucket']['endpoint'] = endpoint
 
-            if bucket_name !='':
+            if bucket_name != '':
                 bucket_details['bucket']['bucket_name'] = bucket_name
 
-            if bucket_creation_date !='':
+            if bucket_creation_date != '':
                 bucket_details['bucket']['creation_date'] = bucket_creation_date
 
-            if total_objs_in_bucket !='':
+            if total_objs_in_bucket != '':
                 bucket_details['bucket']['total_objs_in_bucket_before'] = total_objs_in_bucket
 
-            if total_size !='':
+            if total_size != '':
                 bucket_details['bucket']['total_bytes_in_bucket_before'] = total_size
 
             # Note: MinIO doesn't provide a straightforward way to get bucket size limits unless
@@ -370,11 +371,13 @@ class OadpWorkloads(WorkloadsOperations):
             # bucket_size_available = "Unknown"
             if total_size == 0:
                 total_size = "0B"
-            size_name = ("B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB")
-            i = int(math.floor(math.log(total_size, 1024)))
-            p = math.pow(1024, i)
-            s = round(total_size / p, 2)
-            bucket_utilization = "%s %s" % (s, size_name[i])
+                bucket_utilization = 0
+            else:
+                size_name = ("B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB")
+                i = int(math.floor(math.log(total_size, 1024)))
+                p = math.pow(1024, i)
+                s = round(total_size / p, 2)
+                bucket_utilization = "%s %s" % (s, size_name[i])
 
             if minio_deployed_locally:
                 # Get pvc details of minio deployment
@@ -523,9 +526,9 @@ class OadpWorkloads(WorkloadsOperations):
                 if bool(co_degraded):
                     self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['degraded'].update(co_degraded)
                 if (bool(co_that_are_not_available) == False) and (bool(co_degraded) == False):
-                    self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['status'] = True
+                    self.__run_metadata['summary']['validations']['cluster_operator_post_run_validation']['status'] = 'Pass'
                 else:
-                    self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['status'] = False
+                    self.__run_metadata['summary']['validations']['cluster_operator_post_run_validation']['status'] = 'Fail'
         except Exception as err:
             self.fail_test_run(f" {err} occurred in " + self.get_current_function())
             raise err
@@ -2721,7 +2724,7 @@ class OadpWorkloads(WorkloadsOperations):
         return total_pods
 
     @logger_time_stamp
-    def calc_total_backup_size_per_namespace(self, scenario, namespace):
+    def calc_total_dataset_utilization_per_namespace(self, test_scenario):
         """
         Calculate the total number of pods per namespace.
 
@@ -2732,20 +2735,67 @@ class OadpWorkloads(WorkloadsOperations):
         Returns:
             int: Total number of pods for the specified namespace.
         """
-        dataset_value = scenario.get('dataset')
-
+        dataset_value = test_scenario.get('dataset')
+        ns_capacities = {}
         if isinstance(dataset_value, list):
             # If dataset is a list, iterate through each element
-            total_pods = sum(
-                entry.get('pods_per_ns', 0) for entry in dataset_value if entry.get('namespace') == namespace)
+
+            for item in test_scenario['dataset']:
+                namespace = item['namespace']
+                expected_capacity = item.get('expected_capacity', '0K')
+                pods_per_ns = item['pods_per_ns']
+
+                # Extract the numeric value and the unit
+                match = re.match(r"(\d+\.?\d*)(K|M|G|T)", expected_capacity)
+                if match:
+                    value = float(match.group(1))
+                    unit = match.group(2)
+                else:
+                    raise ValueError(f"Invalid expected_capacity format: {expected_capacity}")
+
+                # Convert to MB based on the unit
+                if unit == 'K':
+                    value /= 1024  # Convert KB to MB
+                elif unit == 'G':
+                    value *= 1024  # Convert GB to MB
+                elif unit == 'T':
+                    value *= 1024 * 1024  # Convert TB to MB
+
+                ns_capacities[namespace] = ns_capacities.get(namespace, 0) + (value * pods_per_ns)
+            total_data = sum(ns_capacities.values())
+            ns_capacities['total_data_in_mb'] = total_data
+            self.__run_metadata['summary']['runtime']['datasetsize'] = {}
+            self.__run_metadata['summary']['runtime']['datasetsize'].update(ns_capacities)
+            logger.info(f'ns_capacities: {ns_capacities} total data is: {total_data}')
+            return ns_capacities
         elif isinstance(dataset_value, dict):
             # If dataset is a dictionary, consider it as a single entry
-            total_pods = dataset_value.get('pods_per_ns', 0) if dataset_value.get('namespace') == namespace else 0
-        else:
-            total_pods = 0
-        logger.info(f"### INFO ### calc_total_pods_per_namespace shows {namespace} has {total_pods}")
-        return total_pods
+            namespace = test_scenario['args']['namespaces_to_backup']
+            expected_capacity = test_scenario['dataset']['expected_capacity']
+            pods_per_ns = test_scenario['dataset']['pods_per_ns']
 
+            # Extract the numeric value and the unit
+            match = re.match(r"(\d+\.?\d*)(K|M|G|T)", expected_capacity)
+            if match:
+                value = float(match.group(1))
+                unit = match.group(2)
+            else:
+                raise ValueError(f"Invalid expected_capacity format: {expected_capacity}")
+
+            # Convert to MB based on the unit
+            if unit == 'K':
+                value /= 1024  # Convert KB to MB
+            elif unit == 'G':
+                value *= 1024  # Convert GB to MB
+            elif unit == 'T':
+                value *= 1024 * 1024  # Convert TB to MB
+
+            total_data = sum(ns_capacities.values())
+            ns_capacities['total_data_in_mb'] = total_data
+            self.__run_metadata['summary']['runtime']['dataset']['sizes'] = {}
+            self.__run_metadata['summary']['runtime']['dataset']['sizes'].update(ns_capacities)
+            logger.info(f'ns_capacities: {ns_capacities} total data is: {total_data}')
+            return ns_capacities
 
 
     @logger_time_stamp
@@ -3236,13 +3286,27 @@ class OadpWorkloads(WorkloadsOperations):
             raise err
 
     @logger_time_stamp
+    def get_dataset_details(self, scenario):
+        """
+        method parses dataset details, and calc sizes
+        """
+        try:
+            self.load_datasets_for_scenario(scenario)
+            self.__run_metadata['summary']['runtime'].update(scenario)
+            self.calc_total_dataset_utilization_per_namespace(scenario)
+
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
+
+    @logger_time_stamp
     def run_workload(self):
        """
        this method is for run workload of upstream code
        """
        # Load Scenario Details
        test_scenario = self.load_test_scenario()
-       self.load_datasets_for_scenario(scenario=test_scenario)
+       self.get_dataset_details(scenario=test_scenario)
 
        # # Verify no left over test results
        self.remove_previous_run_report()
@@ -3258,9 +3322,7 @@ class OadpWorkloads(WorkloadsOperations):
        if self.this_is_downstream():
            self.oadp_get_version_info()
 
-       # Save test scenario run time settings run_metadata dict
-       self.__run_metadata['summary']['runtime'].update(test_scenario)
-       self.__result_dicts.append(test_scenario)
+       # Set relevant index for ELK
        self.generate_elastic_index(test_scenario)
 
        # Setup Default SC and Volume Snapshot Class
@@ -3478,12 +3540,8 @@ class OadpWorkloads(WorkloadsOperations):
                 index_prefix = 'velero-'
             else:
                 index_prefix = 'oadp-'
-            total_namespaces = self.ds_get_all_namespaces()
+
             index_name = f'{index_prefix}' + scenario['testtype'] + '-' + 'single-namespace'
-            # if scenario['dataset']['total_namespaces'] == 1:
-            #     index_name = f'{index_prefix}' + scenario['testtype'] + '-' + 'single-namespace'
-            # elif scenario['dataset']['total_namespaces'] > 1:
-            #         index_name = f'{index_prefix}' + scenario['testtype'] + '-' + 'multi-namespace'
             logger.info(f':: INFO :: ELK index name is: {index_name}')
             self.__run_metadata['index'] = index_name
             return index_name
