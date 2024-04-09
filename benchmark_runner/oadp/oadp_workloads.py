@@ -40,7 +40,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'backup-10pod-vbd-pvc-util-0-0-6-cephrbd-6g' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vbd-pvc-util-minio-6g'
+        # self.__oadp_scenario_name = 'restore-10pod-vbd-pvc-util-0-0-6-cephrbd-6g' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vbd-pvc-util-minio-6g'
         self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
@@ -468,6 +468,72 @@ class OadpWorkloads(WorkloadsOperations):
             self.fail_test_run(f" {err} occurred in " + self.get_current_function())
             raise err
 
+    def validate_dataDownload(self, scenario):
+
+        try:
+
+            import json
+            from datetime import datetime
+            cr_restore_name = scenario['args']['OADP_CR_NAME']
+
+            data = self.get_oc_resource_to_json(resource_type='dataDownload', resource_name='',
+                                                namespace=self.__test_env['velero_ns'])
+            # Initialize variables
+            total_completed_dataDownload = 0
+            total_failed_dataDownload = 0
+            dataDownload_durations = {}
+
+            # Iterate through each dataDownload item
+            for item in data['items']:
+                restore_name = item['metadata'].get('labels', {}).get('velero.io/restore-name')
+                status_phase = item['status'].get('phase')
+
+                # Check if conditions are met
+                if restore_name == cr_restore_name:
+                    if status_phase == "Completed":
+                        total_completed_dataDownload += 1
+
+                        # Calculate duration
+                        start_time = datetime.strptime(item['status']['startTimestamp'], '%Y-%m-%dT%H:%M:%SZ')
+                        end_time = datetime.strptime(item['status']['completionTimestamp'], '%Y-%m-%dT%H:%M:%SZ')
+                        duration = (end_time - start_time).total_seconds()
+
+                        # Store in durations dictionary
+                        dataDownload_durations[restore_name] = dataDownload_durations.get(restore_name, []) + [duration]
+                    elif status_phase != "Completed" or 'progress' in item['status']:
+                        total_failed_dataDownload += 1
+                        print(f"Failed dataDownload: {item}")  # Print the item details
+
+            # Calculate statistics for completed dataDownloads
+            if dataDownload_durations:
+                for restore_name, durations in dataDownload_durations.items():
+                    max_duration = max(durations)
+                    min_duration = min(durations)
+                    avg_duration = sum(durations) / len(durations)
+
+                    # Update the dictionary with statistics
+                    dataDownload_durations[restore_name] = {
+                        'max': max_duration,
+                        'min': min_duration,
+                        'avg': avg_duration
+                    }
+
+            # Add totals to the durations dictionary
+            dataDownload_durations['total_completed_dataDownload'] = total_completed_dataDownload
+            dataDownload_durations['total_failed_dataDownload'] = total_failed_dataDownload
+
+            print(dataDownload_durations)
+            self.__run_metadata['summary']['results']['dataDownload'] = {}
+            self.__run_metadata['summary']['results']['dataDownload'].update(dataDownload_durations)
+
+            if dataDownload_durations['total_failed_dataDownload'] != 0:
+                self.__run_metadata['summary']['validations']['dataDownload_post_run_validation'] = 'FAIL'
+            else:
+                self.__run_metadata['summary']['validations']['dataDownload_post_run_validation'] = 'PASS'
+
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
     def validate_podvolumebackups(self, scenario):
         """
         """
@@ -3610,6 +3676,8 @@ class OadpWorkloads(WorkloadsOperations):
            self.validate_podvolumerestores(test_scenario)
        if test_scenario['args']['OADP_CR_TYPE'] == 'backup' and test_scenario['args']['plugin'] == 'vbd':
            self.validate_datauploads(test_scenario)
+       if test_scenario['args']['OADP_CR_TYPE'] == 'restore' and test_scenario['args']['plugin'] == 'vbd':
+           self.validate_dataDownload(test_scenario)
 
        if self.__oadp_resource_collection:
            # Get Pod Resource after the test
