@@ -40,7 +40,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'restore-10pod-kopia-pvc-util-0-0-7-cephrbd-6g' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vbd-pvc-util-minio-6g'
+        # self.__oadp_scenario_name = 'backup-10pod-vbd-pvc-util-0-0-6-cephrbd-6g' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vbd-pvc-util-minio-6g'
         self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
@@ -456,6 +456,7 @@ class OadpWorkloads(WorkloadsOperations):
 
             print(pvr_durations)
             del pvr_durations['durations']
+            self.__run_metadata['summary']['results']['podvolumerestores'] = {}
             self.__run_metadata['summary']['results']['podvolumerestores'].update(pvr_durations)
 
             if pvr_durations['total_failed_pvr'] != 0:
@@ -512,6 +513,7 @@ class OadpWorkloads(WorkloadsOperations):
             pvb_durations['total_completed_pvb'] = total_completed_pvb
             pvb_durations['total_failed_pvb'] = total_failed_pvb
 
+            self.__run_metadata['summary']['results']['podvolumebackups'] = {}
             self.__run_metadata['summary']['results']['podvolumebackups'].update(pvb_durations)
 
             if pvb_durations['total_failed_pvb'] != 0:
@@ -521,6 +523,64 @@ class OadpWorkloads(WorkloadsOperations):
 
             # Print the results
             print(pvb_durations)
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
+
+    def validate_datauploads(self, scenario):
+        """
+        """
+        try:
+
+            import json
+            from datetime import datetime
+            cr_backup_name = scenario['args']['OADP_CR_NAME']
+
+            data = self.get_oc_resource_to_json(resource_type='DataUploads', resource_name='',namespace=self.__test_env['velero_ns'])
+            # Initialize variables
+            total_completed_dataUpload = 0
+            total_failed_dataUpload = 0
+            dataUpload_durations = {}
+
+            # Iterate through the datauploads items
+            for item in data['items']:
+                if item['metadata']['labels']['velero.io/backup-name'] == cr_backup_name:
+                    if item['status']['phase'] == "Completed":
+                        total_completed_dataUpload += 1
+
+                        # Calculate duration
+                        start_time = datetime.strptime(item['status']['startTimestamp'], '%Y-%m-%dT%H:%M:%SZ')
+                        end_time = datetime.strptime(item['status']['completionTimestamp'], '%Y-%m-%dT%H:%M:%SZ')
+                        duration_seconds = (end_time - start_time).total_seconds()
+
+                        # Store in durations dictionary
+                        dataUpload_durations.setdefault('durations', []).append(duration_seconds)
+                    else:
+                        total_failed_dataUpload += 1
+                        print("Failed dataUpload:")
+                        print(item)  # Print the details of the failed item
+
+            # Calculate max, min, average durations
+            if dataUpload_durations:
+                dataUpload_durations['max'] = max(dataUpload_durations['durations'])
+                dataUpload_durations['min'] = min(dataUpload_durations['durations'])
+                dataUpload_durations['avg'] = sum(dataUpload_durations['durations']) / len(dataUpload_durations['durations'])
+
+            del dataUpload_durations['durations']
+
+            # Update with total counts
+            dataUpload_durations['total_completed_dataUpload'] = total_completed_dataUpload
+            dataUpload_durations['total_failed_dataUpload'] = total_failed_dataUpload
+            self.__run_metadata['summary']['results']['dataUpload'] = {}
+            self.__run_metadata['summary']['results']['dataUpload'].update(dataUpload_durations)
+
+            if dataUpload_durations['total_failed_dataUpload'] != 0:
+                self.__run_metadata['summary']['validations']['dataUpload_post_run_validation'] = 'FAIL'
+            else:
+                self.__run_metadata['summary']['validations']['dataUpload_post_run_validation'] = 'PASS'
+
+            # Print the results
+            print(dataUpload_durations)
         except Exception as err:
             self.fail_test_run(f" {err} occurred in " + self.get_current_function())
             raise err
@@ -3461,6 +3521,7 @@ class OadpWorkloads(WorkloadsOperations):
 
 
 
+
        # # Verify no left over test results
        self.remove_previous_run_report()
 
@@ -3547,6 +3608,8 @@ class OadpWorkloads(WorkloadsOperations):
            self.validate_podvolumebackups(test_scenario)
        if test_scenario['args']['OADP_CR_TYPE'] == 'restore' and test_scenario['args']['plugin'] != 'vbd':
            self.validate_podvolumerestores(test_scenario)
+       if test_scenario['args']['OADP_CR_TYPE'] == 'backup' and test_scenario['args']['plugin'] == 'vbd':
+           self.validate_datauploads(test_scenario)
 
        if self.__oadp_resource_collection:
            # Get Pod Resource after the test
