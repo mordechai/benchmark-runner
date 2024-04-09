@@ -40,7 +40,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'backup-csi-datagen-multi-ns-sanity-cephrbd' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vbd-pvc-util-minio-6g'
+        # self.__oadp_scenario_name = 'backup-10pod-kopia-pvc-util-0-0-7-cephrbd-6g' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vbd-pvc-util-minio-6g'
         self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
@@ -400,6 +400,59 @@ class OadpWorkloads(WorkloadsOperations):
             self.fail_test_run(f" {err} occurred in " + self.get_current_function())
             raise err
 
+    def validate_podvolumebackups(self, scenario):
+        """
+        """
+        import json
+        from datetime import datetime
+        backup = 'backup-10pod-kopia-pvc-util-0-0-7-cephrbd-6g'
+
+        data = self.get_oc_resource_to_json(resource_type='podvolumebackup', resource_name='',namespace=self.__test_env['velero_ns'])
+        # Initialize variables
+        total_completed_pvb = 0
+        total_failed_pvb = 0
+        pvb_durations = {}
+
+        # Iterate through the PodVolumeBackup items
+        for item in data['items']:
+            if item['spec']['tags']['backup'] == f"{backup}":
+                if item['status']['phase'] == "Completed":
+                    total_completed_pvb += 1
+
+                    # Calculate duration
+                    start_time = datetime.strptime(item['status']['startTimestamp'], '%Y-%m-%dT%H:%M:%SZ')
+                    end_time = datetime.strptime(item['status']['completionTimestamp'], '%Y-%m-%dT%H:%M:%SZ')
+                    duration_seconds = (end_time - start_time).total_seconds()
+
+                    # Store in durations dictionary
+                    pvb_durations.setdefault('durations', []).append(duration_seconds)
+                else:
+                    total_failed_pvb += 1
+                    print("Failed PVB:")
+                    print(item)  # Print the details of the failed item
+
+        # Calculate max, min, average durations
+        if pvb_durations:
+            pvb_durations['max'] = max(pvb_durations['durations'])
+            pvb_durations['min'] = min(pvb_durations['durations'])
+            pvb_durations['avg'] = sum(pvb_durations['durations']) / len(pvb_durations['durations'])
+
+        del pvb_durations['durations']
+
+        # Update with total counts
+        pvb_durations['total_completed_pvb'] = total_completed_pvb
+        pvb_durations['total_failed_pvb'] = total_failed_pvb
+
+        self.__run_metadata['summary']['results']['podvolumebackups'].update(pvb_durations)
+
+        if pvb_durations['total_failed_pvb'] != 0:
+            self.__run_metadata['summary']['validations']['podvolumebackup_post_run_validation'] = 'FAIL'
+        else:
+            self.__run_metadata['summary']['validations']['podvolumebackup_post_run_validation'] = 'PASS'
+
+        # Print the results
+        print(pvb_durations)
+
     @logger_time_stamp
     def get_noobaa_version_details(self):
         """
@@ -526,9 +579,9 @@ class OadpWorkloads(WorkloadsOperations):
                 if bool(co_degraded):
                     self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['degraded'].update(co_degraded)
                 if (bool(co_that_are_not_available) == False) and (bool(co_degraded) == False):
-                    self.__run_metadata['summary']['validations']['cluster_operator_post_run_validation']['status'] = 'Pass'
+                    self.__run_metadata['summary']['validations']['cluster_operator_post_run_validation'] = 'Pass'
                 else:
-                    self.__run_metadata['summary']['validations']['cluster_operator_post_run_validation']['status'] = 'Fail'
+                    self.__run_metadata['summary']['validations']['cluster_operator_post_run_validation'] = 'Fail'
         except Exception as err:
             self.fail_test_run(f" {err} occurred in " + self.get_current_function())
             raise err
@@ -2258,8 +2311,33 @@ class OadpWorkloads(WorkloadsOperations):
             self.fail_test_run(f" {err} occurred in " + self.get_current_function())
             raise err
 
+    def validate_cr(self, ns, cr_type, cr_name):
+        """
+        this method parse CR for
+        CR status, kind, itemsBackedUp, itemsRestored, totalItems, Cloud, startTimestamp, completionTimestamp, dyration
+        """
+        try:
+
+            # verify CR exists
+            cr_present = self.is_cr_present(ns=ns, cr_type=cr_type, cr_name=cr_name)
+            if not cr_present:
+                # todo Throw exception and fail test
+                logger.exception(f"Warning no matching cr {cr_name} of type: {cr_type} was found after backup or restore operation")
+
+            jsonpath_cr_status = "'{.status.phase}'"
+            cr_status = self.__ssh.run(cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_cr_status}")
+            if cr_status != '':
+                if cr_status != 'Completed' and cr_status != 'PartiallyFailed':
+                    self.__run_metadata['summary']['validations']['cr_status_post_run_validation'] = 'FAIL'
+                    logger.exception(f' CR status of {cr_status} was returned in validate_cr please check your timeout value on your test')
+                else:
+                    self.__run_metadata['summary']['validations']['cr_status_post_run_validation'] = 'PASS'
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
+
     @logger_time_stamp
-    def set_run_status(self, msg={}):
+    def set_run_status(self, msg=''):
         """
         method for setting status of run
         """
@@ -3238,6 +3316,7 @@ class OadpWorkloads(WorkloadsOperations):
             # setting retry logic for initial dataset presence check to be quick
             self.set_validation_retry_logic(interval_between_checks=5, max_attempts=1)
             dataset_already_present = self.validate_expected_datasets(test_scenario)
+            self.__run_metadata['summary']['validations']['dataset_already_present'] = dataset_already_present
             if not dataset_already_present:
                 self.set_validation_retry_logic(interval_between_checks=15, max_attempts=28)
                 logger.info(
@@ -3245,7 +3324,7 @@ class OadpWorkloads(WorkloadsOperations):
                 for ds in self.__oadp_ds_failing_validation:
                     self.create_source_dataset(test_scenario, ds)
                 dataset_created_as_expected = self.validate_expected_datasets(test_scenario)
-                self.__run_metadata['summary']['results']['dataset_created_as_expected'] = dataset_created_as_expected
+                self.__run_metadata['summary']['validations']['dataset_recreated_as_expected'] = dataset_created_as_expected
                 if not dataset_created_as_expected:
                     logger.exception(f"Creation of Dataset for {test_scenario['args']['OADP_CR_NAME']} did not pass validations  BEFORE the backup will be taken for  {test_scenario}")
                 else:
@@ -3307,6 +3386,7 @@ class OadpWorkloads(WorkloadsOperations):
        # Load Scenario Details
        test_scenario = self.load_test_scenario()
        self.get_dataset_details(scenario=test_scenario)
+
 
        # # Verify no left over test results
        self.remove_previous_run_report()
@@ -3378,16 +3458,20 @@ class OadpWorkloads(WorkloadsOperations):
        if test_scenario['args']['OADP_CR_TYPE'] == 'restore':
            self.set_validation_retry_logic(interval_between_checks=15, max_attempts=28)
            dataset_restored_as_expected = self.validate_expected_datasets(test_scenario)
+           self.__run_metadata['summary']['validations']['dataset_restored_as_expected'] = 'PASS' if dataset_restored_as_expected else 'FAIL'
            self.__run_metadata['summary']['results']['dataset_post_run_validation'] = dataset_restored_as_expected
            if not dataset_restored_as_expected:
                logger.error(
                    f"Restored Dataset for {test_scenario['args']['OADP_CR_NAME']} did not pass post run validations on {test_scenario['args']['namespaces_to_backup']}")
            else:
                logger.info('Restore passed post run validations')
-       # ds validations if restore
-       # cr validation if backup or restore
-       # env/ cluster validations
-       # summarize
+
+       # Post Execution Validate CR status
+       self.validate_cr(ns=self.__test_env['velero_ns'], cr_type=test_scenario['args']['OADP_CR_TYPE'],cr_name=test_scenario['args']['OADP_CR_NAME'])
+
+       # Post Execution Validate PVB or PVR
+       if test_scenario['args']['OADP_CR_TYPE'] == 'backup':
+           self.validate_podvolumebackups(test_scenario)
 
        if self.__oadp_resource_collection:
            # Get Pod Resource after the test
