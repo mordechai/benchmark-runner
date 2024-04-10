@@ -725,6 +725,7 @@ class OadpWorkloads(WorkloadsOperations):
             if pods_restarted_cmd != '':
                 self.__run_metadata['summary']['results']['pod_restarts_post_run_validation'] = {}
                 self.__run_metadata['summary']['results']['pod_restarts_post_run_validation']['status'] = False
+                self.__run_metadata['summary']['validations']['verify_no_pod_restarts_in_velero_ns'] = 'FAIL'
                 get_pod_details = self.__ssh.run(cmd=f'oc get pods -n {target_namespace} -o json')
                 data = json.loads(get_pod_details)
                 pods_that_restarted = {}
@@ -737,6 +738,7 @@ class OadpWorkloads(WorkloadsOperations):
             else:
                 self.__run_metadata['summary']['results']['pod_restarts_post_run_validation'] = {}
                 self.__run_metadata['summary']['results']['pod_restarts_post_run_validation']['status'] = True
+                self.__run_metadata['summary']['validations']['verify_no_pod_restarts_in_velero_ns'] = 'PASS'
                 # Saving empty dict for query consistency in ELK querying
                 self.__run_metadata['summary']['results']['pod_restarts_post_run_validation']['restarted_pods'] = {}
         except Exception as err:
@@ -3292,19 +3294,26 @@ class OadpWorkloads(WorkloadsOperations):
 
         # all datasets are checked for if the pods are in the correct state with relevant pv in correct sc and pv size
         # datasets with role  generator require addition check of pv utilization in regards to utilized size, folders, and
+        pod_presence_and_storage_as_expected = False
+        reattempts = 0
+        while not pod_presence_and_storage_as_expected or reattempts < 5:
 
-        if dataset_validation_mode == 'full':
-            pod_presence_and_storage_as_expected = self.verify_pod_presence_and_storage(scenario, ds)
-            if not pod_presence_and_storage_as_expected:
-                logger.warn(f'validate_dataset: using {dataset_validation_mode}  validation is returning FALSE for pod_presence_and_storage_as_expected: value is: {pod_presence_and_storage_as_expected}')
-                return False
-        if dataset_validation_mode == 'light':
-            pod_presence_and_storage_as_expected = self.waiting_for_ns_to_reach_desired_pods(scenario,ds)
-            if not pod_presence_and_storage_as_expected:
-                logger.warn(f'validate_dataset using {dataset_validation_mode} returning false for pod_presence_and_storage_as_expected: value is: {pod_presence_and_storage_as_expected}')
-                return False
-        if dataset_validation_mode == 'none':
-            logger.warn(f'validate_dataset is set to none -  NO validation will be performed')
+            if dataset_validation_mode == 'full':
+                pod_presence_and_storage_as_expected = self.verify_pod_presence_and_storage(scenario, ds)
+                if not pod_presence_and_storage_as_expected:
+                    logger.warn(f'validate_dataset: using {dataset_validation_mode}  validation is returning FALSE for pod_presence_and_storage_as_expected: value is: {pod_presence_and_storage_as_expected}')
+                    return False
+            if dataset_validation_mode == 'light':
+                pod_presence_and_storage_as_expected = self.waiting_for_ns_to_reach_desired_pods(scenario,ds)
+                if not pod_presence_and_storage_as_expected:
+                    logger.warn(f'validate_dataset using {dataset_validation_mode} returning false for pod_presence_and_storage_as_expected: value is: {pod_presence_and_storage_as_expected}')
+                    return False
+                else:
+                    logger.info(" ## INFO ## Validation checking for pod_presence_and_storage_as_expected - pods are in correct state on the expected storage - validation checks will continue ")
+            if dataset_validation_mode == 'none':
+                logger.warn(f'validate_dataset is set to none -  NO validation will be performed')
+            logger.warn(f" validate_dataset - attempting to check pod_presence_and_storage_as_expected using method waiting_for_ns_to_reach_desired_pods is still waiting on pods to come up - remaing attempts {5 - reattempts}")
+            reattempts +=1
 
         # Validation for pods created with data on them pv
         if role == 'generator':
@@ -3327,11 +3336,11 @@ class OadpWorkloads(WorkloadsOperations):
                 pv_util_details_returned_by_pod = self.get_pod_pv_utilization_info_by_podname(pod, ds)
                 pv_contents_as_expected = self.pv_contains_expected_data(pv_util_details_returned_by_pod, ds)
                 if not pv_contents_as_expected:
-                    logger.warn(
-                        f'::: PV UTIL Contents check FAILURE:::  pv_contents_as_expected: value is: {pv_contents_as_expected} for pod: {pod} in ns {target_namespace} pod returned: {pv_util_details_returned_by_pod}')
+                    logger.error(
+                        f'::: :: Validation - checks for PV Contents are not successful for pv_contents_as_expected: value is: {pv_contents_as_expected} for pod: {pod} in ns {target_namespace} pod returned: {pv_util_details_returned_by_pod} checks are reported by pv_contains_expected_data')
                     return False
                 else:
-                    logger.info(f'::: PV UTIL Contents check successful for pod: {pod} in ns {target_namespace}')
+                    logger.info(f'::: Validation - checks for PV Contents are successful for pod: {pod} in ns {target_namespace} - validations will continue')
         return True
 
 
@@ -3590,7 +3599,7 @@ class OadpWorkloads(WorkloadsOperations):
        # Detect if were using upstream/downstream by velero ns contents
        self.set_velero_stream_source()
 
-       # Get OADP, Velero, Storage Details
+       # # Get OADP, Velero, Storage Details
        self.get_ocp_details()
        self.get_velero_details()
        self.get_storage_details()
