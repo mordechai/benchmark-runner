@@ -40,7 +40,7 @@ class OadpWorkloads(WorkloadsOperations):
         self.__oadp_uuid = self._environment_variables_dict.get('oadp_uuid', '')
         #  To set test scenario variable for 'backup-csi-busybox-perf-single-100-pods-rbd' for  self.__oadp_scenario_name you'll need to  manually set the default value as shown below
         #  for example:   self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario', 'backup-csi-busybox-perf-single-100-pods-rbd')
-        # self.__oadp_scenario_name = 'restore-10pod-vbd-pvc-util-0-0-6-cephrbd-6g' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vbd-pvc-util-minio-6g'
+        # self.__oadp_scenario_name = 'restore-10pod-kopia-pvc-util-0-0-7-cephrbd-6g' #'restore-restic-busybox-perf-single-10-pods-rbd' #'backup-csi-datagen-single-ns-100pods-rbd' #backup-10pod-backup-vbd-pvc-util-minio-6g'
         self.__oadp_scenario_name = self._environment_variables_dict.get('oadp_scenario','')
         self.__oadp_bucket = self._environment_variables_dict.get('oadp_bucket', False)
         self.__oadp_cleanup_cr_post_run = self._environment_variables_dict.get('oadp_cleanup_cr', False)
@@ -455,7 +455,6 @@ class OadpWorkloads(WorkloadsOperations):
             pvr_durations['total_failed_pvr'] = total_failed_pvr
 
             print(pvr_durations)
-            del pvr_durations['durations']
             self.__run_metadata['summary']['results']['podvolumerestores'] = {}
             self.__run_metadata['summary']['results']['podvolumerestores'].update(pvr_durations)
 
@@ -3584,9 +3583,6 @@ class OadpWorkloads(WorkloadsOperations):
        # Load Scenario Details
        test_scenario = self.load_test_scenario()
        self.get_dataset_details(scenario=test_scenario)
-
-
-
 
        # # Verify no left over test results
        self.remove_previous_run_report()
