@@ -70,6 +70,7 @@ class OadpWorkloads(WorkloadsOperations):
             'velero_cli_path': '/tmp/velero-1-12'
         }
         self.__result_dicts = []
+        self.__run_labels = {'key': f"{self._environment_variables_dict.get('oadp_label_name', '')}", 'value': f"{self._environment_variables_dict.get('oadp_label_value', '')}"}
         self.__scenario_datasets = []
         self.__run_metadata = {
             "index": '',
@@ -111,20 +112,26 @@ class OadpWorkloads(WorkloadsOperations):
         This method upload to ElasticSearch the results
         :return:
         """
+        metadata_details = {}
         datetime_format = '%Y-%m-%d %H:%M:%S'
         result_report_json_file = open(self.__result_report)
         result_report_json_str = result_report_json_file.read()
         result_report_json_data = json.loads(result_report_json_str)
         index = self.__run_metadata['index']
         logger.info(f'upload index: {index}')
-        metadata_details = {'uuid': self._environment_variables_dict['uuid'], 'upload_date': datetime.now().strftime(datetime_format), 'run_artifacts_url': os.path.join(self._run_artifacts_url,f'{self._get_run_artifacts_hierarchy(workload_name=self._workload, is_file=True)}-{self._time_stamp_format}.tar.gz'), 'scenario': self.__run_metadata['summary']['runtime']['name']}
+        metadata_details = {'labels': self.__run_labels, 'uuid': self._environment_variables_dict['uuid'], 'upload_date': datetime.now().strftime(datetime_format), 'run_artifacts_url': os.path.join(self._run_artifacts_url,f'{self._get_run_artifacts_hierarchy(workload_name=self._workload, is_file=True)}-{self._time_stamp_format}.tar.gz'), 'scenario': self.__run_metadata['summary']['runtime']['name']}
         # run artifacts data
         result_report_json_data['metadata'] = {}
         result_report_json_data['metadata'].update(metadata_details)
         with open(self.__result_report, 'w') as output_file:
             json.dump(result_report_json_data, output_file, indent=4)
 
-        self._es_operations.upload_to_elasticsearch(index=index, data=result_report_json_data)
+        try:
+            self._es_operations.upload_to_elasticsearch(index=index, data=result_report_json_data)
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
+
 
     @logger_time_stamp
     def get_logs_by_pod_ns(self, namespace):
@@ -778,7 +785,7 @@ class OadpWorkloads(WorkloadsOperations):
                 if bool(co_degraded):
                     self.__run_metadata['summary']['results']['cluster_operator_post_run_validation']['degraded'].update(co_degraded)
                 if (bool(co_that_are_not_available) == False) and (bool(co_degraded) == False):
-                    self.__run_metadata['summary']['validations']['cluster_operator_post_run_validation'] = 'Pass'
+                    self.__run_metadata['summary']['validations']['cluster_operator_post_run_validation'] = 'PASS'
                 else:
                     self.__run_metadata['summary']['validations']['cluster_operator_post_run_validation'] = 'Fail'
         except Exception as err:
@@ -3745,7 +3752,11 @@ class OadpWorkloads(WorkloadsOperations):
                             'scenario': self.__run_metadata['summary']['runtime']['name']}
         result_report_json_data['metadata'] = {}
         result_report_json_data['metadata'].update(metadata_details)
-        self._es_operations.upload_to_elasticsearch(index=index, data=result_report_json_data)
+        try:
+            self._es_operations.upload_to_elasticsearch(index=index, data=result_report_json_data)
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
     @logger_time_stamp
     def cleaning_up_oadp_resources(self, scenario):

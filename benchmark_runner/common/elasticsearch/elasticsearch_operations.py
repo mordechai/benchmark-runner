@@ -163,27 +163,59 @@ class ElasticSearchOperations:
         :param es_add_items:
         :return:
         """
-        if index and data:
-            # Add items
-            if es_add_items:
-                data.update(es_add_items)
-
-            # utcnow - solve timestamp issue
-            data['timestamp'] = datetime.utcnow()  # datetime.now()
-
-            # Uploads data to elasticsearch server
-            try:
-                if isinstance(data, dict):  # JSON Object
-                    self.__es.index(index=index, doc_type=doc_type, document=data, **kwargs)
-                else:  # JSON Array
-                    for record in data:
-                        self.__es.index(index=index, doc_type=doc_type, document=record, **kwargs)
-                return True
-            except Exception as err:
-                raise err
-        else:
+        # if index and data:
+        #     # Add items
+        #     if es_add_items:
+        #         data.update(es_add_items)
+        #
+        #     # utcnow - solve timestamp issue
+        #     data['timestamp'] = datetime.utcnow()  # datetime.now()
+        #
+        #     # Uploads data to elasticsearch server
+        #     try:
+        #         if isinstance(data, dict):  # JSON Object
+        #             self.__es.index(index=index, doc_type=doc_type, document=data, **kwargs)
+        #         else:  # JSON Array
+        #             for record in data:
+        #                 self.__es.index(index=index, doc_type=doc_type, document=record, **kwargs)
+        #         return True
+        #     except Exception as err:
+        #         raise err
+        # else:
+        #     raise Exception('Empty parameters: index/ data')
+        if not index or not data:
             raise Exception('Empty parameters: index/ data')
 
+        # Add additional items if provided
+        if es_add_items:
+            data.update(es_add_items)
+
+        # Add timestamp
+        data['timestamp'] = datetime.utcnow()
+
+        # Upload data to Elasticsearch
+        try:
+            if isinstance(data, dict):  # JSON Object
+                response = self.__es.index(index=index, doc_type=doc_type, document=data, **kwargs)
+            else:  # JSON Array
+                response = []
+                for record in data:
+                    response.append(self.__es.index(index=index, doc_type=doc_type, document=record, **kwargs))
+
+            print(f"resonpse from elastic search is:{response}")
+            # Check response status
+            if isinstance(response, list):
+                for res in response:
+                    if res['result'] not in ['created', 'updated']:
+                        raise Exception(f"Failed to index document: {res}")
+            else:
+                if response['result'] not in ['created', 'updated']:
+                    raise Exception(f"Failed to index document: {response}")
+
+            return True
+
+        except Exception as err:
+            raise Exception(f"elastic error: {err}")
     @typechecked()
     @logger_time_stamp
     def update_elasticsearch_index(self, index: str, id: str, metadata: dict = ''):
