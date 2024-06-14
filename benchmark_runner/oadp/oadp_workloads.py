@@ -3683,9 +3683,9 @@ class OadpWorkloads(WorkloadsOperations):
        self.validate_cr(ns=self.__test_env['velero_ns'], cr_type=test_scenario['args']['OADP_CR_TYPE'],cr_name=test_scenario['args']['OADP_CR_NAME'])
 
        # Post Execution Validate PVB or PVR
-       if test_scenario['args']['OADP_CR_TYPE'] == 'backup' and test_scenario['args']['plugin'] != 'vbd':
+       if test_scenario['args']['OADP_CR_TYPE'] == 'backup' and test_scenario['args']['plugin'] == 'kopia':
            self.validate_podvolumebackups(test_scenario)
-       if test_scenario['args']['OADP_CR_TYPE'] == 'restore' and test_scenario['args']['plugin'] != 'vbd':
+       if test_scenario['args']['OADP_CR_TYPE'] == 'restore' and test_scenario['args']['plugin'] == 'kopia':
            self.validate_podvolumerestores(test_scenario)
        if test_scenario['args']['OADP_CR_TYPE'] == 'backup' and test_scenario['args']['plugin'] == 'vbd':
            self.validate_datauploads(test_scenario)
