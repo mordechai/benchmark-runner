@@ -1426,28 +1426,66 @@ class OadpWorkloads(WorkloadsOperations):
         except Exception as err:
             self.fail_test_run(f" {err} occurred in " + self.get_current_function())
             raise err
+
+    def execute_with_retries(self, cmd, retries=3, delay=2):
+        """
+        Execute an SSH command with retries if the result is empty or None.
+
+        :param cmd: Command to execute.
+        :param retries: Number of retries.
+        :param delay: Delay between retries in seconds.
+        :return: The result of the command or None.
+        """
+        for attempt in range(1, retries + 1):
+            result = self.__ssh.run(cmd)
+            if result is not None and result != '':
+                return result
+            logger.warning(f"Attempt {attempt} failed for command: {cmd}")
+            if attempt < retries:
+                time.sleep(delay)
+        logger.error(f"### ERROR ### execute_with_retries: command failed after {retries} attempts: {cmd}")
+        return None
+
     @logger_time_stamp
     def get_pod_pv_utilization_info_by_podname(self, podname, ds):
         results_capacity_usage = {}
         active_role = ds['role']
         mount_point = ds['dataset_path']
         namespace = ds['namespace']
-        disk_capacity = self.__ssh.run(
-            cmd=f"oc  exec -it -n{namespace} {podname} -- /bin/bash -c \"du -sh {mount_point}\"")
-        current_disk_capacity = disk_capacity.split('\n')[-1].split('\t')[0]
-        unit_disk_capacity = current_disk_capacity[-1]
-        results_capacity_usage['disk_capacity'] = current_disk_capacity
-        files_count = self.__ssh.run(
-            cmd=f"oc  exec -it -n{namespace} {podname} -- /bin/bash -c \"find {mount_point}* -type f -name \"my-random-file-*\" -o -name \"dd_file\" |wc -l\"")
-        current_files_count = files_count.split('\n')[-1].split('\t')[0]
-        results_capacity_usage['files_count'] = current_files_count
-        folders_count = self.__ssh.run(
-            cmd=f"oc  exec -it -n{namespace} {podname} -- /bin/bash -c \"find {mount_point}python/* -type d  |wc -l\"")
-        current_folders_count = folders_count.split('\n')[-1].split('\t')[0]
-        results_capacity_usage['folders_count'] = current_folders_count
-        results_capacity_usage['active_role'] = active_role
-        logger.info(f"get_pod_pv_utilization_info saw pv contained: {results_capacity_usage}")
-        return results_capacity_usage
+
+        try:
+
+            disk_capacity_cmd = f"oc exec -n {namespace} {podname} -- /bin/bash -c 'du -sh {mount_point}'"
+            disk_capacity = self.execute_with_retries(disk_capacity_cmd)
+            if disk_capacity is not None:
+                current_disk_capacity = disk_capacity.split('\n')[-1].split('\t')[0] if disk_capacity else 0
+                results_capacity_usage['disk_capacity'] = current_disk_capacity
+            else:
+                results_capacity_usage['disk_capacity'] = 0
+
+            files_count_cmd = f"oc exec -n {namespace} {podname} -- /bin/bash -c 'find {mount_point}* -type f -name \"my-random-file-*\" -o -name \"dd_file\" | wc -l'"
+            files_count = self.execute_with_retries(files_count_cmd)
+            if files_count is not None:
+                current_files_count = files_count.split('\n')[-1].split('\t')[0] if files_count else 0
+                results_capacity_usage['files_count'] = current_files_count
+            else:
+                results_capacity_usage['files_count'] = 0
+
+            folders_count_cmd = f"oc exec -n {namespace} {podname} -- /bin/bash -c 'find {mount_point}python/* -type d | wc -l'"
+            folders_count = self.execute_with_retries(folders_count_cmd)
+            if folders_count is not None:
+                current_folders_count = folders_count.split('\n')[-1].split('\t')[0] if folders_count else 0
+                results_capacity_usage['folders_count'] = current_folders_count
+            else:
+                results_capacity_usage['folders_count'] = None
+
+            results_capacity_usage['active_role'] = active_role
+            logger.info(f"get_pod_pv_utilization_info saw pv contained: {results_capacity_usage}")
+            return results_capacity_usage
+
+        except Exception as err:
+            self.fail_test_run(f" {err} occurred in " + self.get_current_function())
+            raise err
 
     @logger_time_stamp
     def get_pod_pv_utilization_info(self, test_scenario, ds):
@@ -3656,8 +3694,7 @@ class OadpWorkloads(WorkloadsOperations):
        if oadp_cr_already_present:
            logger.warn(
                f"You are attempting to use CR name: {test_scenario['args']['OADP_CR_NAME']} which is already present so it will be deleted")
-           self.delete_oadp_custom_resources(ns=self.__test_env['velero_ns'], cr_type=test_scenario['args']['OADP_CR_TYPE'],
-                                             cr_name=test_scenario['args']['OADP_CR_NAME'])
+           self.delete_oadp_custom_resources(ns=self.__test_env['velero_ns'], cr_type=test_scenario['args']['OADP_CR_TYPE'], cr_name=test_scenario['args']['OADP_CR_NAME'])
 
        # Get Node and Pod Resource prior to test
        if self.__oadp_resource_collection:
