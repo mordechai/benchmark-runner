@@ -203,6 +203,11 @@ class OadpConfigurationMixin:
                 resource_name="velero",
                 namespace=test_env["velero_ns"],
             )
+            if not velero_deployment or "spec" not in velero_deployment:
+                logger.warning(
+                    f":: WARN :: set_velero_log_level: velero deployment not found in {test_env['velero_ns']}"
+                )
+                return
             velero_current_args = velero_deployment["spec"]["template"]["spec"]["containers"][0]["args"]
             if "--log-level=debug" not in velero_current_args:
                 velero_current_args.append("--log-level=debug")
