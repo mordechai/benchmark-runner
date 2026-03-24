@@ -115,7 +115,8 @@ class OadpReportingMixin:
                 )
             if not os.path.exists(oadp_velero_log) or os.stat(oadp_velero_log).st_size == 0:
                 logger.warning(f"oadp_velero_log is either not present or empty check file path: {oadp_velero_log}")
-            self._OadpWorkloads__ssh.run(cmd=f"oc get {cr_type} {cr_name} -n {test_env['velero_ns']} -o json >> {oadp_cr_log}")
+            qualified_type = f"{cr_type}.velero.io" if cr_type in ("backup", "restore") else cr_type
+            self._OadpWorkloads__ssh.run(cmd=f"oc get {qualified_type} {cr_name} -n {test_env['velero_ns']} -o json >> {oadp_cr_log}")
             if not os.path.exists(oadp_cr_log) or os.stat(oadp_cr_log).st_size == 0:
                 logger.warning(f"oadp_cr_log is either not present or empty check file path: {oadp_cr_log}")
         except Exception as err:
@@ -124,29 +125,51 @@ class OadpReportingMixin:
 
     @logger_time_stamp
     def invoke_log_collection(self, scenario: dict) -> None:
-        """Run the external log_collector script and validate artifact files were written."""
+        """Collect diagnostic artifacts for the OADP run into the artifacts directory."""
         try:
-            log_collector_sh = f"{self._OadpWorkloads__oadp_misc_dir}/benchmark-runner-wrapper/log_collector.sh"
+            logs_folder = self._run_artifacts_path
+            velero_ns = self._OadpWorkloads__test_env["velero_ns"]
+            plugin = scenario["args"]["plugin"]
             cr_name = scenario["args"]["OADP_CR_NAME"]
+
             logger.info(
                 f"invoke_log_collection is attempting to collect logs from cr: {cr_name} "
-                f"and write logs to dir: {self._run_artifacts_path}"
+                f"and write logs to dir: {logs_folder}"
             )
-            log_collection_output = self._OadpWorkloads__ssh.run(
-                cmd=f"{log_collector_sh} {cr_name} --enable-collect-events --logs-folder {self._run_artifacts_path}"
-            )
-            logger.info(f"log_collection_output: {log_collection_output}")
 
-            logger.info(f"Getting the list of file names that exist in {self._run_artifacts_path} folder")
-            list_of_files = list(self._OadpWorkloads__ssh.run(cmd=f"find {self._run_artifacts_path} -type f").splitlines())
-            logger.info(f"{list_of_files}")
+            self._ensure_log_dirs(logs_folder, scenario)
+            self.collect_scenario_summary(logs_folder, scenario, velero_ns)
+            self.collect_velero_describe(logs_folder, scenario, velero_ns)
+            self.collect_bsl_yaml(logs_folder, velero_ns)
+            if self.this_is_downstream():
+                self.collect_dpa_yaml(logs_folder, scenario, velero_ns)
+                self.collect_cr_yaml(logs_folder, scenario, velero_ns)
+            self.collect_velero_ns_pod_logs(logs_folder, velero_ns)
+            if plugin != "csi":
+                self.collect_backup_repositories(logs_folder, scenario, velero_ns)
+            self.collect_bucket_content(logs_folder)
+            self.collect_pod_distribution(logs_folder, scenario)
+            self.collect_plugin_objects(logs_folder, scenario, velero_ns)
+            self.collect_cluster_events(logs_folder, scenario["name"])
+
+            list_of_files = list(
+                self._OadpWorkloads__ssh.run(
+                    cmd=f"find {logs_folder} -type f"
+                ).splitlines()
+            )
+            logger.info(f"Artifact files collected: {list_of_files}")
 
             if len(list_of_files) < 10:
-                logger.error(f"ERROR: log_collector.sh script wasn't running. Total files: {len(list_of_files)}")
+                logger.error(
+                    f"Log collection produced fewer files than expected. "
+                    f"Total files: {len(list_of_files)}"
+                )
 
-            for i in range(len(list_of_files)):
-                if os.stat(list_of_files[i]).st_size == 0:
-                    logger.error(f"ERROR: invoke_log_collection, The file size of: {list_of_files[i]} is 0 bytes")
+            for filepath in list_of_files:
+                if filepath and os.path.exists(filepath) and os.stat(filepath).st_size == 0:
+                    logger.error(
+                        f"invoke_log_collection: artifact file is 0 bytes: {filepath}"
+                    )
         except Exception as err:
             self.fail_test_run(f" {err} occurred in " + self.get_current_function())
             raise err
@@ -177,9 +200,8 @@ class OadpReportingMixin:
         try:
             if msg:
                 self._OadpWorkloads__run_metadata["summary"]["results"].update(msg)
-            self._OadpWorkloads__run_metadata["status"] = self._OadpWorkloads__run_metadata["summary"]["runtime"][
-                "results"
-            ].get("cr_status", "error")
+            runtime_results = self._OadpWorkloads__run_metadata["summary"]["runtime"].get("results", {})
+            self._OadpWorkloads__run_metadata["status"] = runtime_results.get("cr_status", "error")
         except Exception as err:
             self.fail_test_run(f" {err} occurred in " + self.get_current_function())
             raise err

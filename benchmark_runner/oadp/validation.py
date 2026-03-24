@@ -123,6 +123,7 @@ class OadpValidationMixin:
         try:
             from dateutil import parser as date_parser
 
+            oc_type = f"{cr_type}.velero.io" if cr_type in ("backup", "restore") else cr_type
             oadp_cr_already_present = self.is_cr_present(ns=ns, cr_type=cr_type, cr_name=cr_name)
             if not oadp_cr_already_present:
                 logger.warning(f"Warning no matching cr {cr_name} of type: {cr_type} was found")
@@ -131,7 +132,7 @@ class OadpValidationMixin:
                 ssh = self._OadpWorkloads__ssh
 
                 jsonpath_cr_status = "'{.status.phase}'"
-                cr_status = ssh.run(cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_cr_status}")
+                cr_status = ssh.run(cmd=f"oc get {oc_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_cr_status}")
                 if cr_status != "":
                     cr_info["cr_status"] = cr_status
                     if cr_status != "Completed":
@@ -140,39 +141,39 @@ class OadpValidationMixin:
                         logger.info(f"### parse_oadp_cr: CR status is {cr_status}")
 
                 jsonpath_cr_kind = "'{.kind}'"
-                cr_kind = ssh.run(cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_cr_kind}")
+                cr_kind = ssh.run(cmd=f"oc get {oc_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_cr_kind}")
                 if cr_kind != "":
                     cr_info["cr_kind"] = cr_kind
 
                 if cr_type == "backup":
                     jsonpath = "'{.status.progress.itemsBackedUp}'"
-                    result = ssh.run(cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath}")
+                    result = ssh.run(cmd=f"oc get {oc_type}/{cr_name} -n {ns} -o jsonpath={jsonpath}")
                     if result != "":
                         cr_info["cr_items_backedup"] = result
 
                 if cr_type == "restore":
                     jsonpath = "'{.status.progress.itemsRestored}'"
-                    result = ssh.run(cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath}")
+                    result = ssh.run(cmd=f"oc get {oc_type}/{cr_name} -n {ns} -o jsonpath={jsonpath}")
                     if result != "":
                         cr_info["cr_items_restored"] = result
 
                 jsonpath_total = "'{.status.progress.totalItems}'"
-                cr_items_total = ssh.run(cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_total}")
+                cr_items_total = ssh.run(cmd=f"oc get {oc_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_total}")
                 if cr_items_total != "":
                     cr_info["cr_items_total"] = cr_items_total
 
                 jsonpath_errors = "'{.status.errors}'"
-                cr_errors = ssh.run(cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_errors}")
+                cr_errors = ssh.run(cmd=f"oc get {oc_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_errors}")
                 if cr_errors != "":
                     cr_info["cr_errors"] = cr_errors
 
                 jsonpath_start = "'{.status.startTimestamp}'"
-                cr_start_timestamp = ssh.run(cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_start}")
+                cr_start_timestamp = ssh.run(cmd=f"oc get {oc_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_start}")
                 if cr_start_timestamp != "":
                     cr_info["cr_start_timestamp"] = cr_start_timestamp
 
                 jsonpath_completion = "'{.status.completionTimestamp}'"
-                cr_completion_timestamp = ssh.run(cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_completion}")
+                cr_completion_timestamp = ssh.run(cmd=f"oc get {oc_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_completion}")
                 if cr_completion_timestamp != "":
                     cr_info["cr_completion_timestamp"] = cr_completion_timestamp
                     if cr_start_timestamp != "":
@@ -195,6 +196,7 @@ class OadpValidationMixin:
 
     def validate_cr(self, ns, cr_type, cr_name):
         try:
+            oc_type = f"{cr_type}.velero.io" if cr_type in ("backup", "restore") else cr_type
             cr_present = self.is_cr_present(ns=ns, cr_type=cr_type, cr_name=cr_name)
             if not cr_present:
                 logger.exception(
@@ -202,7 +204,7 @@ class OadpValidationMixin:
                 )
             jsonpath_cr_status = "'{.status.phase}'"
             cr_status = self._OadpWorkloads__ssh.run(
-                cmd=f"oc get {cr_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_cr_status}"
+                cmd=f"oc get {oc_type}/{cr_name} -n {ns} -o jsonpath={jsonpath_cr_status}"
             )
             if cr_status != "":
                 if cr_status not in ("Completed", "PartiallyFailed"):
@@ -223,8 +225,9 @@ class OadpValidationMixin:
             cr_name = scenario["args"]["OADP_CR_NAME"]
             test_env = self._OadpWorkloads__test_env
             ssh = self._OadpWorkloads__ssh
+            oc_type = f"{cr_type}.velero.io" if cr_type in ("backup", "restore") else cr_type
             jsonpath = "'{.status.errors}'"
-            error_count = ssh.run(cmd=f"oc get {cr_type}/{cr_name} -n {test_env['velero_ns']} -o jsonpath={jsonpath}")
+            error_count = ssh.run(cmd=f"oc get {oc_type}/{cr_name} -n {test_env['velero_ns']} -o jsonpath={jsonpath}")
             if error_count != "" and "Error" not in error_count and int(error_count) > 0:
                 oadp_velero_log = os.path.join(self._run_artifacts_path, f"{cr_name}-error-and-warning-summary.log")
                 if test_env["source"] == "upstream":

@@ -98,13 +98,14 @@ class OadpExecutionMixin:
         try:
             test_env = self._OadpWorkloads__test_env
             ssh = self._OadpWorkloads__ssh
+            oc_type = f"{cr_type}.velero.io" if cr_type in ("backup", "restore") else cr_type
             if not self.is_cr_present(ns=test_env["velero_ns"], cr_type=cr_type, cr_name=cr_name):
                 logger.info(f"{cr_name} OADPWaitForConditionTimeout raised an exception in is_oadp_cr_present returned false")
             jsonpath = "'{.status.phase}'"
             try:
                 current_wait_time = 0
                 while current_wait_time <= testcase_timeout:
-                    state = ssh.run(cmd=f"oc get {cr_type}/{cr_name} -n {test_env['velero_ns']} -o jsonpath={jsonpath}")
+                    state = ssh.run(cmd=f"oc get {oc_type}/{cr_name} -n {test_env['velero_ns']} -o jsonpath={jsonpath}")
                     if state in CR_TERMINAL_STATES:
                         logger.info(f"::: INFO ::: wait_for_condition_of_oadp_cr: CR {cr_name} state: {state}")
                         return True
@@ -116,7 +117,7 @@ class OadpExecutionMixin:
                                 f":: ERROR :: wait_for_condition_of_oadp_cr: re-auth failed, CR {cr_name} state: {state}"
                             )
                             return False
-                        state = ssh.run(cmd=f"oc get {cr_type}/{cr_name} -n {test_env['velero_ns']} -o jsonpath={jsonpath}")
+                        state = ssh.run(cmd=f"oc get {oc_type}/{cr_name} -n {test_env['velero_ns']} -o jsonpath={jsonpath}")
                         if state in CR_TERMINAL_STATES:
                             return True
 

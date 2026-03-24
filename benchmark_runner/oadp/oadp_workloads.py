@@ -35,6 +35,7 @@ from benchmark_runner.oadp.datamover import OadpDatamoverMixin
 from benchmark_runner.oadp.dataset import OadpDatasetMixin
 from benchmark_runner.oadp.environment import OadpEnvironmentMixin
 from benchmark_runner.oadp.execution import OadpExecutionMixin
+from benchmark_runner.oadp.log_collection import OadpLogCollectionMixin
 from benchmark_runner.oadp.oadp_exceptions import MissingResultReport
 from benchmark_runner.oadp.pod_validation import OadpPodValidationMixin
 from benchmark_runner.oadp.reporting import OadpReportingMixin
@@ -52,6 +53,7 @@ class OadpWorkloads(
     OadpPodValidationMixin,
     OadpValidationMixin,
     OadpReportingMixin,
+    OadpLogCollectionMixin,
     OadpCleanupMixin,
     OadpResourcesMixin,
     OadpEnvironmentMixin,

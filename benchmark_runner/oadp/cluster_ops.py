@@ -117,7 +117,8 @@ class OadpClusterOpsMixin:
     @logger_time_stamp
     def get_custom_resources(self, cr_type: str, ns: str) -> list[str]:
         """Return names of all custom resources of the given type in the namespace."""
-        cmd_output = self._OadpWorkloads__ssh.run(cmd=f'oc get {cr_type} -n {ns} -o jsonpath="{{.items[*].metadata.name}}"')
+        qualified_type = f"{cr_type}.velero.io" if cr_type in ("backup", "restore") else cr_type
+        cmd_output = self._OadpWorkloads__ssh.run(cmd=f'oc get {qualified_type} -n {ns} -o jsonpath="{{.items[*].metadata.name}}"')
         return list(filter(None, cmd_output.split(" ")))
 
     def execute_with_retries(self, cmd: str, retries: int = 3, delay: int = 2) -> str | None:
