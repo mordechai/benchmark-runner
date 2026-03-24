@@ -186,7 +186,6 @@ class OadpWorkloads(
         self.get_ocp_details()
         self.get_velero_details()
         self.get_storage_details()
-        self.get_bucket_details("velero")
         if self.this_is_downstream():
             self.oadp_get_version_info()
 
@@ -204,6 +203,8 @@ class OadpWorkloads(
                 self.config_dpa_for_plugin(scenario=test_scenario, oadp_namespace=self.__test_env["velero_ns"])
                 self.wait_for_dpa_changes(oadp_namespace=self.__test_env["velero_ns"])
                 self.verify_bsl_status()
+
+        self.get_bucket_details("velero")
 
         if test_scenario["args"]["OADP_CR_TYPE"] == "backup":
             self.verify_datsets_before_backups(test_scenario)
