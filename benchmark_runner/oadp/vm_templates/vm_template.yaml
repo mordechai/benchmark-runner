@@ -1,0 +1,77 @@
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: {{ vm_name }}
+  namespace: {{ namespace }}
+  labels:
+    app: {{ vm_name }}
+    oadp-workload: "true"
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: {{ vm_name }}
+        oadp-workload: "true"
+    spec:
+      domain:
+        cpu:
+          cores: {{ cpu_cores }}
+        resources:
+          requests:
+            memory: {{ memory }}
+        devices:
+          disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+              bootOrder: 1
+            {% for disk in data_disks %}
+            - name: {{ disk.name }}
+              disk:
+                bus: virtio
+            {% endfor %}
+          interfaces:
+            - name: default
+              masquerade: {}
+      networks:
+        - name: default
+          pod: {}
+      volumes:
+        - name: rootdisk
+          dataVolume:
+            name: {{ vm_name }}-rootdisk
+        {% for disk in data_disks %}
+        - name: {{ disk.name }}
+          dataVolume:
+            name: {{ vm_name }}-{{ disk.name }}
+        {% endfor %}
+  dataVolumeTemplates:
+    - metadata:
+        name: {{ vm_name }}-rootdisk
+      spec:
+        source:
+          pvc:
+            name: {{ os_dv_name }}
+            namespace: {{ namespace }}
+        pvc:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: {{ root_disk_size }}
+          storageClassName: {{ storage_class }}
+    {% for disk in data_disks %}
+    - metadata:
+        name: {{ vm_name }}-{{ disk.name }}
+      spec:
+        source:
+          blank: {}
+        pvc:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: {{ disk.size }}
+          storageClassName: {{ storage_class }}
+    {% endfor %}

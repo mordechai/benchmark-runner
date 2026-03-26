@@ -278,11 +278,54 @@ class OadpCleanupMixin:
             raise err
 
     @logger_time_stamp
+    def _stop_vms_before_deletion(self, namespace: str) -> None:
+        """Gracefully stop all VMs in a namespace before deleting it.
+
+        Uses ``virtctl stop`` to trigger guest shutdown, then waits
+        for VMIs to disappear.
+        """
+        ssh = self._OadpWorkloads__ssh
+        vm_list = ssh.run(cmd=f'oc get vm -n {namespace} --no-headers -o custom-columns=":metadata.name" 2>/dev/null')
+        if not vm_list.strip():
+            return
+
+        for vm_name in vm_list.strip().splitlines():
+            vm_name = vm_name.strip()
+            if vm_name:
+                ssh.run(cmd=f"virtctl stop {vm_name} -n {namespace}", background=True)
+        logger.info(f"Issued stop for all VMs in {namespace}, waiting for VMIs to terminate")
+
+        timeout = 300
+        elapsed = 0
+        while elapsed < timeout:
+            vmi_count = ssh.run(cmd=f"oc get vmi -n {namespace} --no-headers 2>/dev/null | wc -l")
+            try:
+                count = int(vmi_count.strip())
+            except (ValueError, AttributeError):
+                count = 0
+            if count == 0:
+                logger.info(f"All VMIs terminated in {namespace}")
+                return
+            time.sleep(10)
+            elapsed += 10
+        logger.warning(f"VMI termination timeout in {namespace} after {timeout}s")
+
+    def _namespace_has_vms(self, namespace: str) -> bool:
+        """Return True if the namespace contains any VirtualMachine resources."""
+        result = self._OadpWorkloads__ssh.run(cmd=f"oc get vm -n {namespace} --no-headers 2>/dev/null | wc -l")
+        try:
+            return int(result.strip()) > 0
+        except (ValueError, AttributeError):
+            return False
+
+    @logger_time_stamp
     def delete_source_dataset(self, target_namespace: str) -> bool | None:
         """Delete dataset namespaces listed in target_namespace and wait until they are gone."""
         try:
             self.oadp_timer(action="start", transaction_name="delete_oadp_source_dataset")
             for n in target_namespace.split(","):
+                if self._namespace_has_vms(n):
+                    self._stop_vms_before_deletion(n)
                 del_ns_cmd = self._OadpWorkloads__ssh.run(cmd=f"oc delete ns {n}")
                 if del_ns_cmd.find("deleted") < 0:
                     logger.warning(f"attempt to delete namespace {n} failed")

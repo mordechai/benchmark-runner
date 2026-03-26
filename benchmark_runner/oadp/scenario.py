@@ -14,7 +14,10 @@ from benchmark_runner.common.logger.logger_time_stamp import logger, logger_time
 from benchmark_runner.oadp.constants import (
     ES_INDEX_PREFIX_DOWNSTREAM,
     ES_INDEX_PREFIX_UPSTREAM,
+    KNOWN_PLUGINS,
+    SHELL_METACHARACTERS,
     SOURCE_UPSTREAM,
+    VM_DATASET_ROLE,
 )
 from benchmark_runner.oadp.oadp_exceptions import OadpError
 
@@ -76,12 +79,16 @@ class OadpScenarioMixin:
                     if not all(key in data for key in check_keys):
                         logger.error("Error: Missing dataset key(s) in the scenario.")
                         return False
+                    if not self._validate_dataset_entry(data):
+                        return False
                 if "args" in scenario and isinstance(dataset, dict) and "namespace_to_backup" not in scenario["args"]:
                     logger.error("Error: 'args' key must contain 'namespace_to_backup' when dataset is a list.")
                     return False
             elif isinstance(dataset, dict):
                 if not all(key in dataset for key in dataset_keys):
                     logger.error("Error: Missing dataset key(s) in the scenario.")
+                    return False
+                if not self._validate_dataset_entry(dataset):
                     return False
             else:
                 logger.error("Error: 'dataset' must be either a list or a dictionary.")
@@ -93,6 +100,50 @@ class OadpScenarioMixin:
                 logger.error("Error: Missing 'args' key(s) in the scenario.")
                 return False
 
+            plugin = args.get("plugin", "")
+            if plugin and plugin not in KNOWN_PLUGINS:
+                logger.error(f"Error: Unknown plugin '{plugin}'. Allowed: {sorted(KNOWN_PLUGINS)}")
+                return False
+
+            if not self._validate_no_shell_metacharacters(args, "args"):
+                return False
+
+        if not self._validate_no_shell_metacharacters(scenario, "scenario"):
+            return False
+
+        return True
+
+    @staticmethod
+    def _validate_dataset_entry(dataset: dict) -> bool:
+        """Validate VM-specific fields when role is 'kubevirt'."""
+        if dataset.get("role") == VM_DATASET_ROLE:
+            if "vm_profile" not in dataset:
+                logger.error("Error: VM dataset (role=kubevirt) requires 'vm_profile' field.")
+                return False
+            if "vms_per_namespace" not in dataset and "pods_per_ns" not in dataset:
+                logger.error("Error: VM dataset requires 'vms_per_namespace' or 'pods_per_ns'.")
+                return False
+
+            disk_overrides = dataset.get("disk_overrides", {})
+            if isinstance(disk_overrides, dict):
+                for disk_name, fields in disk_overrides.items():
+                    if not isinstance(fields, dict):
+                        continue
+                    all_values = {disk_name: disk_name}
+                    all_values.update({k: v for k, v in fields.items() if isinstance(v, str)})
+                    for key, value in all_values.items():
+                        if any(ch in value for ch in SHELL_METACHARACTERS) or "'" in value:
+                            logger.error(f"Error: disk_overrides field '{key}' contains forbidden characters: {value!r}")
+                            return False
+        return True
+
+    @staticmethod
+    def _validate_no_shell_metacharacters(mapping: dict, context: str) -> bool:
+        """Reject string values containing shell metacharacters (SEC-002)."""
+        for key, value in mapping.items():
+            if isinstance(value, str) and any(ch in value for ch in SHELL_METACHARACTERS):
+                logger.error(f"Error: {context} field '{key}' contains forbidden shell metacharacters: {value!r}")
+                return False
         return True
 
     @logger_time_stamp

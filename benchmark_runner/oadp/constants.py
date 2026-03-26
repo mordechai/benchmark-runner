@@ -97,9 +97,13 @@ PLUGIN_KOPIA = "kopia"
 PLUGIN_CSI = "csi"
 PLUGIN_VBD = "vbd"
 PLUGIN_VSM = "vsm"
+PLUGIN_KUBEVIRT = "kubevirt"
 
 # File-level backup plugins (use fs-backup flags)
 FILE_LEVEL_PLUGINS = frozenset({PLUGIN_RESTIC, PLUGIN_KOPIA})
+
+# All recognized plugin identifiers for fail-fast validation
+KNOWN_PLUGINS = frozenset({PLUGIN_RESTIC, PLUGIN_KOPIA, PLUGIN_CSI, PLUGIN_VBD, PLUGIN_VSM, PLUGIN_KUBEVIRT})
 
 # ---------------------------------------------------------------------------
 # Timestamp formats
@@ -111,8 +115,21 @@ CR_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 # Storage classes
 # ---------------------------------------------------------------------------
 SC_CEPH_RBD = "ocs-storagecluster-ceph-rbd"
+SC_CEPH_RBD_VIRTUALIZATION = "ocs-storagecluster-ceph-rbd-virtualization"
 SC_CEPHFS = "ocs-storagecluster-cephfs"
 SC_CEPHFS_SHALLOW = "ocs-storagecluster-cephfs-shallow"
+
+# ---------------------------------------------------------------------------
+# KubeVirt / VM defaults
+# ---------------------------------------------------------------------------
+VM_DATASET_ROLE = "kubevirt"
+VM_DEFAULT_BATCH_SIZE = 10
+VM_DEFAULT_THROTTLE_BATCHES = 5
+VM_DEFAULT_POPULATION_CONCURRENCY = 10
+VM_DEFAULT_SSH_USER = "cloud-user"
+
+# Characters forbidden in scenario string values that flow into shell commands
+SHELL_METACHARACTERS = frozenset(";|&$`(){}><\n\r")
 
 # ---------------------------------------------------------------------------
 # Retry / timeout defaults

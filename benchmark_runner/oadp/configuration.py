@@ -8,11 +8,14 @@ from benchmark_runner.common.logger.logger_time_stamp import logger, logger_time
 from benchmark_runner.oadp.constants import (
     DEFAULT_DPA_NAME,
     PLUGIN_CSI,
+    PLUGIN_KUBEVIRT,
     PLUGIN_RESTIC,
     PLUGIN_VBD,
     SC_CEPH_RBD,
+    SC_CEPH_RBD_VIRTUALIZATION,
     SC_CEPHFS,
     SC_CEPHFS_SHALLOW,
+    VM_DATASET_ROLE,
 )
 
 
@@ -53,6 +56,14 @@ class OadpConfigurationMixin:
                 )
                 return True
 
+            if self._scenario_needs_kubevirt_plugin(scenario):
+                default_plugins = result.get("velero", {}).get("defaultPlugins", [])
+                if PLUGIN_KUBEVIRT not in default_plugins:
+                    logger.warning(
+                        "## WARNING ### is_dpa_change_needed: 'kubevirt' not in defaultPlugins but scenario uses VM datasets."
+                    )
+                    return True
+
             uploader_type = PLUGIN_RESTIC if scenario["args"]["plugin"] == PLUGIN_RESTIC else "kopia"
 
             logger.info(
@@ -86,6 +97,10 @@ class OadpConfigurationMixin:
     @logger_time_stamp
     def config_dpa_for_plugin(self, scenario, oadp_namespace):
         try:
+            if not self.validate_dpa_structure(oadp_namespace):
+                logger.error("DPA pre-validation failed; aborting DPA patch")
+                self.fail_test_run("DPA pre-validation failed before patching")
+
             ssh = self._OadpWorkloads__ssh
             base_dir = self._OadpWorkloads__oadp_base_dir
             dpa_data = self.get_oc_resource_to_json(
@@ -114,9 +129,13 @@ class OadpConfigurationMixin:
                 uploader_type = "kopia"
             else:
                 uploader_type = scenario["args"]["plugin"]
+            kubevirt_flag = (
+                "kubevirt_plugin=true" if self._scenario_needs_kubevirt_plugin(scenario) else "kubevirt_plugin=false"
+            )
             ansible_args = (
                 f"dpa_name={dpa_name} bucket_name={bucket_name} plugin_type={uploader_type} "
-                f"profile={config_profile} cred_name={cred_name} oadp_ns={oadp_namespace}"
+                f"profile={config_profile} cred_name={cred_name} oadp_ns={oadp_namespace} "
+                f"{kubevirt_flag}"
             )
             logger.info(
                 f'### INFO ### Updating DPA via ansible: ansible-playbook {base_dir}/modify-dpa.yaml -e "{ansible_args}" -vvv'
@@ -137,7 +156,7 @@ class OadpConfigurationMixin:
         try:
             base_dir = self._OadpWorkloads__oadp_base_dir
             cmd_set_volume_snapshot_class = ""
-            if sc == SC_CEPH_RBD:
+            if sc in (SC_CEPH_RBD, SC_CEPH_RBD_VIRTUALIZATION):
                 cmd_set_volume_snapshot_class = self._OadpWorkloads__ssh.run(cmd=f"oc apply -f {base_dir}/vsc-cephRBD.yaml")
             if sc in (SC_CEPHFS, SC_CEPHFS_SHALLOW):
                 cmd_set_volume_snapshot_class = self._OadpWorkloads__ssh.run(cmd=f"oc apply -f {base_dir}/vsc-cephFS.yaml")
@@ -204,9 +223,7 @@ class OadpConfigurationMixin:
                 namespace=test_env["velero_ns"],
             )
             if not velero_deployment or "spec" not in velero_deployment:
-                logger.warning(
-                    f":: WARN :: set_velero_log_level: velero deployment not found in {test_env['velero_ns']}"
-                )
+                logger.warning(f":: WARN :: set_velero_log_level: velero deployment not found in {test_env['velero_ns']}")
                 return
             velero_current_args = velero_deployment["spec"]["template"]["spec"]["containers"][0]["args"]
             if "--log-level=debug" not in velero_current_args:
@@ -276,6 +293,46 @@ class OadpConfigurationMixin:
         except Exception as err:
             self.fail_test_run(f" {err} occurred in " + self.get_current_function())
             raise err
+
+    @staticmethod
+    def _scenario_needs_kubevirt_plugin(scenario: dict) -> bool:
+        """Return True when any dataset in the scenario uses role 'kubevirt'."""
+        dataset_value = scenario.get("dataset")
+        if isinstance(dataset_value, list):
+            return any(d.get("role") == VM_DATASET_ROLE for d in dataset_value)
+        if isinstance(dataset_value, dict):
+            return dataset_value.get("role") == VM_DATASET_ROLE
+        return False
+
+    @logger_time_stamp
+    def validate_dpa_structure(self, oadp_namespace: str) -> bool:
+        """Pre-validate DPA JSON before patching (SEC-004).
+
+        Checks that the DPA has the expected top-level structure so
+        that a bad patch cannot silently corrupt the resource.
+        """
+        dpa_data = self.get_oc_resource_to_json(
+            resource_type="dpa",
+            resource_name=self._OadpWorkloads__oadp_dpa,
+            namespace=oadp_namespace,
+        )
+        if not dpa_data:
+            logger.error("DPA pre-validation: resource not found")
+            return False
+
+        required_paths = [
+            ("spec", "configuration", "velero", "defaultPlugins"),
+            ("spec", "backupLocations"),
+        ]
+        for path_parts in required_paths:
+            node = dpa_data
+            for part in path_parts:
+                if not isinstance(node, dict) or part not in node:
+                    logger.error(f"DPA pre-validation: missing path {'.'.join(path_parts)} at '{part}'")
+                    return False
+                node = node[part]
+        logger.info("DPA pre-validation: structure OK")
+        return True
 
     @logger_time_stamp
     def setup_ocs_cephfs_shallow(self):

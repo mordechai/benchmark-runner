@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Any, NoReturn
 
 from benchmark_runner.common.logger.logger_time_stamp import logger, logger_time_stamp
-from benchmark_runner.oadp.constants import DATETIME_FORMAT, RESULT_REPORT_PATH
+from benchmark_runner.oadp.constants import DATETIME_FORMAT, RESULT_REPORT_PATH, VM_DATASET_ROLE
 
 
 class OadpReportingMixin:
@@ -116,7 +116,9 @@ class OadpReportingMixin:
             if not os.path.exists(oadp_velero_log) or os.stat(oadp_velero_log).st_size == 0:
                 logger.warning(f"oadp_velero_log is either not present or empty check file path: {oadp_velero_log}")
             qualified_type = f"{cr_type}.velero.io" if cr_type in ("backup", "restore") else cr_type
-            self._OadpWorkloads__ssh.run(cmd=f"oc get {qualified_type} {cr_name} -n {test_env['velero_ns']} -o json >> {oadp_cr_log}")
+            self._OadpWorkloads__ssh.run(
+                cmd=f"oc get {qualified_type} {cr_name} -n {test_env['velero_ns']} -o json >> {oadp_cr_log}"
+            )
             if not os.path.exists(oadp_cr_log) or os.stat(oadp_cr_log).st_size == 0:
                 logger.warning(f"oadp_cr_log is either not present or empty check file path: {oadp_cr_log}")
         except Exception as err:
@@ -133,8 +135,7 @@ class OadpReportingMixin:
             cr_name = scenario["args"]["OADP_CR_NAME"]
 
             logger.info(
-                f"invoke_log_collection is attempting to collect logs from cr: {cr_name} "
-                f"and write logs to dir: {logs_folder}"
+                f"invoke_log_collection is attempting to collect logs from cr: {cr_name} and write logs to dir: {logs_folder}"
             )
 
             self._ensure_log_dirs(logs_folder, scenario)
@@ -151,25 +152,17 @@ class OadpReportingMixin:
             self.collect_pod_distribution(logs_folder, scenario)
             self.collect_plugin_objects(logs_folder, scenario, velero_ns)
             self.collect_cluster_events(logs_folder, scenario["name"])
+            self.invoke_vm_log_collection(logs_folder, scenario, velero_ns)
 
-            list_of_files = list(
-                self._OadpWorkloads__ssh.run(
-                    cmd=f"find {logs_folder} -type f"
-                ).splitlines()
-            )
+            list_of_files = list(self._OadpWorkloads__ssh.run(cmd=f"find {logs_folder} -type f").splitlines())
             logger.info(f"Artifact files collected: {list_of_files}")
 
             if len(list_of_files) < 10:
-                logger.error(
-                    f"Log collection produced fewer files than expected. "
-                    f"Total files: {len(list_of_files)}"
-                )
+                logger.error(f"Log collection produced fewer files than expected. Total files: {len(list_of_files)}")
 
             for filepath in list_of_files:
                 if filepath and os.path.exists(filepath) and os.stat(filepath).st_size == 0:
-                    logger.error(
-                        f"invoke_log_collection: artifact file is 0 bytes: {filepath}"
-                    )
+                    logger.error(f"invoke_log_collection: artifact file is 0 bytes: {filepath}")
         except Exception as err:
             self.fail_test_run(f" {err} occurred in " + self.get_current_function())
             raise err
@@ -226,6 +219,59 @@ class OadpReportingMixin:
             full_msg = full_msg + pretty_json
         if full_msg != "" or obj_to_json is not None:
             logger.info(full_msg)
+
+    @logger_time_stamp
+    def enrich_summary_with_vm_metadata(self, scenario: dict) -> None:
+        """Add VM-specific fields to the run_metadata JSON summary."""
+        try:
+            dataset_value = scenario.get("dataset")
+            has_vms = False
+            if isinstance(dataset_value, list):
+                has_vms = any(d.get("role") == VM_DATASET_ROLE for d in dataset_value)
+            elif isinstance(dataset_value, dict):
+                has_vms = dataset_value.get("role") == VM_DATASET_ROLE
+
+            if not has_vms:
+                return
+
+            run_metadata = self._OadpWorkloads__run_metadata
+            run_metadata["summary"]["runtime"]["dataset_type"] = "kubevirt"
+
+            ssh = self._OadpWorkloads__ssh
+            cnv_csv = ssh.run(
+                cmd="oc get csv -n openshift-cnv --no-headers "
+                '-o custom-columns=":metadata.name" 2>/dev/null '
+                "| grep kubevirt-hyperconverged-operator | head -1"
+            )
+            if cnv_csv.strip():
+                cnv_version = ssh.run(
+                    cmd=f"oc get csv {cnv_csv.strip()} -n openshift-cnv -o jsonpath='{{.spec.version}}' 2>/dev/null"
+                )
+                run_metadata["summary"]["env"]["cnv"] = {
+                    "version": cnv_version.strip(),
+                    "csv": cnv_csv.strip(),
+                }
+
+            namespace = scenario["args"].get("namespaces_to_backup", "")
+            if namespace:
+                vm_count = ssh.run(cmd=f"oc get vm -n {namespace} --no-headers 2>/dev/null | wc -l")
+                running_vmis = ssh.run(cmd=f"oc get vmi -n {namespace} --no-headers 2>/dev/null | grep -c Running")
+                dv_count = ssh.run(cmd=f"oc get dv -n {namespace} --no-headers 2>/dev/null | wc -l")
+                run_metadata["summary"]["resources"]["vm_counts"] = {
+                    "total_vms": self._safe_int(vm_count),
+                    "running_vmis": self._safe_int(running_vmis),
+                    "total_datavolumes": self._safe_int(dv_count),
+                }
+
+        except Exception as err:
+            logger.warning(f"enrich_summary_with_vm_metadata failed: {err}")
+
+    @staticmethod
+    def _safe_int(value: str) -> int:
+        try:
+            return int(value.strip())
+        except (ValueError, AttributeError):
+            return 0
 
     @logger_time_stamp
     def remove_previous_run_report(self) -> bool | None:

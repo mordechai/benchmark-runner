@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 
 from benchmark_runner.common.logger.logger_time_stamp import logger, logger_time_stamp
+from benchmark_runner.oadp.constants import VM_DATASET_ROLE
 
 
 class OadpDatasetMixin:
@@ -71,8 +72,10 @@ class OadpDatasetMixin:
             logger.info(f"### INFO ### create_source_dataset: ds is {ds}")
             if ds["role"] == "BusyBoxPodSingleNS.sh":
                 self.busybox_dataset_creation(scenario, ds)
-            if ds["role"] in ("generator", "dd_generator"):
+            elif ds["role"] in ("generator", "dd_generator"):
                 self.create_multi_pvutil_dataset(scenario, ds)
+            elif ds["role"] == VM_DATASET_ROLE:
+                self.create_vm_dataset(scenario, ds)
         except Exception as err:
             self.fail_test_run(f" {err} occurred in " + self.get_current_function())
             raise err

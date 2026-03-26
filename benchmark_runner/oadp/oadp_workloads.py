@@ -30,6 +30,7 @@ from benchmark_runner.oadp.constants import (
     SOURCE_UPSTREAM,
     VALIDATION_MODE_LIGHT,
     VELERO_CLI_PATH,
+    VM_DATASET_ROLE,
 )
 from benchmark_runner.oadp.datamover import OadpDatamoverMixin
 from benchmark_runner.oadp.dataset import OadpDatasetMixin
@@ -42,6 +43,8 @@ from benchmark_runner.oadp.reporting import OadpReportingMixin
 from benchmark_runner.oadp.resources import OadpResourcesMixin
 from benchmark_runner.oadp.scenario import OadpScenarioMixin
 from benchmark_runner.oadp.validation import OadpValidationMixin
+from benchmark_runner.oadp.vm_operations import OadpVmOperationsMixin
+from benchmark_runner.oadp.vm_validation import OadpVmValidationMixin
 from benchmark_runner.workloads.workloads_operations import WorkloadsOperations
 
 
@@ -49,6 +52,8 @@ class OadpWorkloads(
     OadpConfigurationMixin,
     OadpDatamoverMixin,
     OadpDatasetMixin,
+    OadpVmOperationsMixin,
+    OadpVmValidationMixin,
     OadpExecutionMixin,
     OadpPodValidationMixin,
     OadpValidationMixin,
@@ -93,6 +98,7 @@ class OadpWorkloads(
             "validation_mode",
             VALIDATION_MODE_LIGHT,
         )
+        self.__oadp_enable_kubevirt = self._environment_variables_dict.get("oadp_enable_kubevirt", False)
         self.__oadp_resource_collection = False
         self.__oadp_ds_failing_validation = []
         self.__retry_logic = {
@@ -147,6 +153,21 @@ class OadpWorkloads(
                 "transactions": [],
             },
         }
+
+    # ------------------------------------------------------------------
+    # Dataset type detection
+    # ------------------------------------------------------------------
+
+    def _scenario_has_vm_datasets(self, scenario: dict) -> bool:
+        """Return True when the feature flag is on and scenario contains VM datasets."""
+        if not self.__oadp_enable_kubevirt:
+            return False
+        dataset_value = scenario.get("dataset")
+        if isinstance(dataset_value, list):
+            return any(d.get("role") == VM_DATASET_ROLE for d in dataset_value)
+        if isinstance(dataset_value, dict):
+            return dataset_value.get("role") == VM_DATASET_ROLE
+        return False
 
     # ------------------------------------------------------------------
     # Lifecycle hooks
@@ -208,8 +229,13 @@ class OadpWorkloads(
 
         self.get_bucket_details("velero")
 
+        has_vm_datasets = self._scenario_has_vm_datasets(test_scenario)
+
         if test_scenario["args"]["OADP_CR_TYPE"] == "backup":
-            self.verify_datsets_before_backups(test_scenario)
+            if has_vm_datasets:
+                self.verify_vm_datasets_before_backups(test_scenario)
+            else:
+                self.verify_datsets_before_backups(test_scenario)
 
         if test_scenario["args"]["OADP_CR_TYPE"] == "restore":
             remove_source_dataset = test_scenario["args"].get("existingResourcePolicy", False)
@@ -240,16 +266,21 @@ class OadpWorkloads(
         self.oadp_execute_scenario(test_scenario, run_method="python")
 
         if test_scenario["args"]["OADP_CR_TYPE"] == "restore":
-            self.set_validation_retry_logic(interval_between_checks=15, max_attempts=28)
-            dataset_restored = self.validate_expected_datasets(test_scenario)
-            self.__run_metadata["summary"]["validations"]["dataset_restored_as_expected"] = (
-                "PASS" if dataset_restored else "FAIL"
-            )
-            self.__run_metadata["summary"]["results"]["dataset_post_run_validation"] = dataset_restored
-            if not dataset_restored:
-                logger.error(f"Restored Dataset for {test_scenario['args']['OADP_CR_NAME']} did not pass post run validations")
+            if has_vm_datasets:
+                self.validate_restored_vm_datasets(test_scenario)
             else:
-                logger.info("Restore passed post run validations")
+                self.set_validation_retry_logic(interval_between_checks=15, max_attempts=28)
+                dataset_restored = self.validate_expected_datasets(test_scenario)
+                self.__run_metadata["summary"]["validations"]["dataset_restored_as_expected"] = (
+                    "PASS" if dataset_restored else "FAIL"
+                )
+                self.__run_metadata["summary"]["results"]["dataset_post_run_validation"] = dataset_restored
+                if not dataset_restored:
+                    logger.error(
+                        f"Restored Dataset for {test_scenario['args']['OADP_CR_NAME']} did not pass post run validations"
+                    )
+                else:
+                    logger.info("Restore passed post run validations")
 
         self.validate_cr(
             ns=self.__test_env["velero_ns"],
@@ -285,6 +316,7 @@ class OadpWorkloads(
         self.verify_pod_restarts(self.__test_env["velero_ns"])
         self.verify_cluster_operators_status()
 
+        self.enrich_summary_with_vm_metadata(test_scenario)
         self.set_run_status()
         self.create_json_summary()
 
