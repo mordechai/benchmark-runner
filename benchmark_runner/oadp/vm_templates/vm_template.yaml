@@ -31,6 +31,9 @@ spec:
               disk:
                 bus: virtio
             {% endfor %}
+            - name: cloudinitdisk
+              disk:
+                bus: virtio
           interfaces:
             - name: default
               masquerade: {}
@@ -46,6 +49,41 @@ spec:
           dataVolume:
             name: {{ vm_name }}-{{ disk.name }}
         {% endfor %}
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            userData: |
+              #cloud-config
+              user: {{ ssh_user }}
+              {% if ssh_password %}
+              password: {{ ssh_password }}
+              chpasswd:
+                expire: false
+              ssh_pwauth: true
+              {% elif not ssh_authorized_keys %}
+              password: redhat
+              chpasswd:
+                expire: false
+              ssh_pwauth: true
+              {% else %}
+              ssh_pwauth: false
+              {% endif %}
+              {% if ssh_authorized_keys %}
+              ssh_authorized_keys:
+                {% for key in ssh_authorized_keys %}
+                - {{ key }}
+                {% endfor %}
+              {% endif %}
+              {% if data_disks %}
+              runcmd:
+                {% for disk in data_disks %}
+                {% if disk.filesystem and disk.mount_point %}
+                - ['mkfs.{{ disk.filesystem }}', '-f', '/dev/disk/by-id/virtio-{{ disk.name }}']
+                - ['mkdir', '-p', '{{ disk.mount_point }}']
+                - ['mount', '/dev/disk/by-id/virtio-{{ disk.name }}', '{{ disk.mount_point }}']
+                - ['bash', '-c', 'echo /dev/disk/by-id/virtio-{{ disk.name }} {{ disk.mount_point }} {{ disk.filesystem }} defaults 0 0 >> /etc/fstab']
+                {% endif %}
+                {% endfor %}
+              {% endif %}
   dataVolumeTemplates:
     - metadata:
         name: {{ vm_name }}-rootdisk

@@ -30,10 +30,12 @@ class OadpDatasetMixin:
                 obj_to_json=self.ds_get_total_datasets_for_namespace(namespace=ns),
             )
             for ds_count, ds in enumerate(self.ds_get_datasets_for_namespace(namespace=ns)):
+                asset_count = ds.get("pods_per_ns", ds.get("vms_per_namespace", 0))
+                asset_type = "VMs" if ds.get("role") == VM_DATASET_ROLE else "pods"
                 self.log_this(
                     level="INFO",
                     msg=f"Namespace: {ns} Dataset #{ds_count + 1} has total "
-                    f"{ds['pods_per_ns']} pods in ns {ns} detailed info: ",
+                    f"{asset_count} {asset_type} in ns {ns} detailed info: ",
                     obj_to_json=ds,
                 )
 
@@ -50,9 +52,11 @@ class OadpDatasetMixin:
             for ds in self.ds_get_datasets_for_namespace(namespace=ns):
                 logger.info(f"create_dataset will begin creating dataset for ns {ns} that has a total datasets of: {ds}")
                 self.create_source_dataset(scenario, ds)
+                created = ds.get("pods_per_ns", ds.get("vms_per_namespace", 0))
+                noun = "VMs" if ds.get("role") == VM_DATASET_ROLE else "pods"
                 logger.info(
-                    f"### INFO ### create_dataset completed adding pods of type {ds['role']} "
-                    f"that created {ds['pods_per_ns']} pods in ns {ns}"
+                    f"### INFO ### create_dataset completed adding {noun} of type {ds['role']} "
+                    f"that created {created} {noun} in ns {ns}"
                 )
 
     @logger_time_stamp

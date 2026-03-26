@@ -7,6 +7,7 @@ rather than reimplementing via raw SSH commands.
 
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from jinja2 import Environment, FileSystemLoader
 
 from benchmark_runner.common.logger.logger_time_stamp import logger, logger_time_stamp
 from benchmark_runner.oadp.constants import (
+    SHELL_METACHARACTERS,
     VM_DEFAULT_BATCH_SIZE,
     VM_DEFAULT_POPULATION_CONCURRENCY,
     VM_DEFAULT_SSH_USER,
@@ -34,6 +36,47 @@ class OadpVmOperationsMixin:
             lstrip_blocks=True,
         )
 
+    @staticmethod
+    def _ssh_user_from_profile(profile: dict) -> str:
+        cloud_init_cfg = profile.get("cloud_init", {})
+        users = cloud_init_cfg.get("users", [{}])
+        if users:
+            return users[0].get("name", VM_DEFAULT_SSH_USER)
+        return VM_DEFAULT_SSH_USER
+
+    @staticmethod
+    def _ssh_authorized_keys_from_profile(profile: dict) -> list:
+        cloud_init_cfg = profile.get("cloud_init", {})
+        users = cloud_init_cfg.get("users", [{}])
+        if users:
+            return users[0].get("ssh_authorized_keys", [])
+        return []
+
+    _SAFE_PROFILE_FIELD_RE = re.compile(r"^[a-zA-Z0-9_./ -]+$")
+
+    @classmethod
+    def _validate_profile_shell_fields(cls, profile: dict) -> None:
+        """Reject profile fields containing shell metacharacters before template rendering (SEC-002 defense-in-depth)."""
+        for disk in profile.get("disks", []):
+            for field in ("name", "filesystem", "mount_point"):
+                value = disk.get(field)
+                if value is None:
+                    continue
+                if not isinstance(value, str) or not cls._SAFE_PROFILE_FIELD_RE.match(value):
+                    raise ValueError(f"Profile disk field '{field}' contains unsafe characters: {value!r}")
+                if any(ch in value for ch in SHELL_METACHARACTERS) or "'" in value:
+                    raise ValueError(f"Profile disk field '{field}' contains shell metacharacters: {value!r}")
+        data_gen = profile.get("data_generation", {})
+        config = data_gen.get("config", {})
+        for field in ("database", "bs"):
+            value = config.get(field)
+            if value is not None and isinstance(value, str):
+                if not cls._SAFE_PROFILE_FIELD_RE.match(value):
+                    raise ValueError(f"Profile data_generation.config.{field} contains unsafe characters: {value!r}")
+        ssh_user = cls._ssh_user_from_profile(profile)
+        if not cls._SAFE_PROFILE_FIELD_RE.match(ssh_user):
+            raise ValueError(f"Profile cloud_init user contains unsafe characters: {ssh_user!r}")
+
     # ------------------------------------------------------------------
     # VM dataset creation entry point
     # ------------------------------------------------------------------
@@ -45,6 +88,7 @@ class OadpVmOperationsMixin:
         profile = load_vm_profile(profile_name)
         disk_overrides = ds.get("disk_overrides")
         profile = merge_disk_overrides(profile, disk_overrides)
+        self._validate_profile_shell_fields(profile)
 
         namespace = ds["namespace"]
         vms_per_ns = ds.get("vms_per_namespace", ds.get("pods_per_ns", 1))
@@ -177,6 +221,15 @@ class OadpVmOperationsMixin:
         )
         data_disks = [d for d in profile.get("disks", []) if d.get("boot_order") != 1]
 
+        ssh_user = self._ssh_user_from_profile(profile)
+        ssh_authorized_keys = self._ssh_authorized_keys_from_profile(profile)
+        ssh_password = profile.get("cloud_init", {}).get("password", "")
+        if not ssh_password and not ssh_authorized_keys:
+            logger.warning(
+                "No SSH keys or explicit password in profile — defaulting to password 'redhat'. "
+                "This is acceptable for benchmark clusters only."
+            )
+
         self.oadp_timer(action="start", transaction_name="vm_dataset_creation")
         batch_count = 0
 
@@ -191,6 +244,9 @@ class OadpVmOperationsMixin:
                 os_dv_name=os_dv_name,
                 root_disk_size=root_disk.get("size", "30Gi"),
                 storage_class=sc,
+                ssh_user=ssh_user,
+                ssh_authorized_keys=ssh_authorized_keys,
+                ssh_password=ssh_password,
             )
 
             vm_file = f"/tmp/oadp-vm-{namespace}-{i}.yaml"
@@ -301,7 +357,7 @@ class OadpVmOperationsMixin:
         )
         method = profile.get("data_generation", {}).get("method", "")
         config = profile.get("data_generation", {}).get("config", {})
-        ssh_user = VM_DEFAULT_SSH_USER
+        ssh_user = self._ssh_user_from_profile(profile)
 
         self.oadp_timer(action="start", transaction_name="vm_data_population")
 
@@ -324,6 +380,7 @@ class OadpVmOperationsMixin:
                     namespace,
                     pending_vms,
                     ssh_user,
+                    method,
                     scenario,
                 )
                 pending_vms = []
@@ -334,6 +391,7 @@ class OadpVmOperationsMixin:
                 namespace,
                 pending_vms,
                 ssh_user,
+                method,
                 scenario,
             )
 
@@ -346,10 +404,33 @@ class OadpVmOperationsMixin:
         config: dict,
         profile: dict,
     ) -> str:
-        """Construct the in-guest data generation command string."""
+        """Construct the in-guest data generation command string.
+
+        For HammerDB, passes database type, warehouse count, and virtual users
+        as positional arguments to the in-guest ``run_tpcc.sh`` script.
+        The script is expected at ``/opt/hammerdb/run_tpcc.sh`` in the VM image.
+        """
         if method == "hammerdb":
-            return "/opt/hammerdb/run_tpcc.sh"
+            database = config.get("database", "mariadb")
+            warehouses = config.get("tpcc_warehouses", 10)
+            vusers = config.get("tpcc_virtual_users", 4)
+            return f"/opt/hammerdb/run_tpcc.sh {database} {warehouses} {vusers}"
+        if method == "dd":
+            data_disks = [d for d in profile.get("disks", []) if d.get("mount_point")]
+            if not data_disks:
+                return ""
+            disk = data_disks[0]
+            mount_point = disk.get("mount_point", "/mnt/data")
+            bs = config.get("bs", "1M")
+            count = config.get("count", 1024)
+            return f"dd if=/dev/urandom of={mount_point}/fill.dat bs={bs} count={count} oflag=direct"
         return ""
+
+    _DATA_GEN_PROCESS_PATTERNS = {
+        "hammerdb": "hammerdb|run_tpcc",
+        # Match guest dd line: spaces between argv tokens (not dd.if=)
+        "dd": r"dd.*fill\.dat",
+    }
 
     def _wait_for_data_gen_batch(
         self,
@@ -357,17 +438,20 @@ class OadpVmOperationsMixin:
         namespace: str,
         vm_names: list[str],
         ssh_user: str,
+        method: str,
         scenario: dict,
     ) -> None:
         """Poll VMs until data generation processes finish."""
         timeout = int(scenario["args"].get("testcase_timeout", 43200))
+        process_pattern = self._DATA_GEN_PROCESS_PATTERNS.get(method, method)
         remaining = list(vm_names)
         elapsed = 0
         while remaining and elapsed < timeout:
             still_running = []
             for vm_name in remaining:
                 result = ssh.run(
-                    cmd=f"virtctl ssh {ssh_user}@{vm_name} -n {namespace} --command 'pgrep -c hammerdb || echo 0'"
+                    cmd=f"virtctl ssh {ssh_user}@{vm_name} -n {namespace} "
+                    f"--command 'pgrep -fc \"{process_pattern}\" || echo 0'"
                 )
                 try:
                     count = int(result.strip().split()[-1])

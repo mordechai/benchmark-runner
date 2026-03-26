@@ -41,7 +41,7 @@ from benchmark_runner.oadp.oadp_exceptions import MissingResultReport
 from benchmark_runner.oadp.pod_validation import OadpPodValidationMixin
 from benchmark_runner.oadp.reporting import OadpReportingMixin
 from benchmark_runner.oadp.resources import OadpResourcesMixin
-from benchmark_runner.oadp.scenario import OadpScenarioMixin
+from benchmark_runner.oadp.scenario import OadpScenarioMixin, scenario_includes_kubevirt_dataset
 from benchmark_runner.oadp.validation import OadpValidationMixin
 from benchmark_runner.oadp.vm_operations import OadpVmOperationsMixin
 from benchmark_runner.oadp.vm_validation import OadpVmValidationMixin
@@ -155,19 +155,43 @@ class OadpWorkloads(
         }
 
     # ------------------------------------------------------------------
-    # Dataset type detection
+    # Dataset type detection and gating
     # ------------------------------------------------------------------
+
+    def _reject_kubevirt_if_disabled(self, scenario: dict) -> None:
+        """Fail fast when a kubevirt scenario is loaded but the feature flag is off."""
+        if self.__oadp_enable_kubevirt:
+            return
+        if scenario_includes_kubevirt_dataset(scenario):
+            msg = (
+                f"Scenario '{scenario.get('name', '')}' uses role '{VM_DATASET_ROLE}' "
+                f"but OADP_ENABLE_KUBEVIRT is False. Set OADP_ENABLE_KUBEVIRT=True to run VM scenarios."
+            )
+            logger.error(msg)
+            self.fail_test_run(msg)
+            raise RuntimeError(msg)
+
+    def _check_cnv_prerequisite(self, scenario: dict) -> None:
+        """Verify CNV operator is installed when the scenario uses VM datasets."""
+        if not self._scenario_has_vm_datasets(scenario):
+            return
+        result = self.__ssh.run(cmd="oc get csv -n openshift-cnv -o jsonpath='{.items[0].status.phase}' 2>/dev/null")
+        if "Succeeded" not in result:
+            msg = (
+                "OpenShift Virtualization (CNV) operator is not installed or not ready "
+                "in namespace 'openshift-cnv'. VM scenarios require CNV. "
+                f"CSV phase check returned: {result.strip()!r}"
+            )
+            logger.error(msg)
+            self.fail_test_run(msg)
+            raise RuntimeError(msg)
+        logger.info("CNV operator pre-check passed: CSV phase is Succeeded")
 
     def _scenario_has_vm_datasets(self, scenario: dict) -> bool:
         """Return True when the feature flag is on and scenario contains VM datasets."""
         if not self.__oadp_enable_kubevirt:
             return False
-        dataset_value = scenario.get("dataset")
-        if isinstance(dataset_value, list):
-            return any(d.get("role") == VM_DATASET_ROLE for d in dataset_value)
-        if isinstance(dataset_value, dict):
-            return dataset_value.get("role") == VM_DATASET_ROLE
-        return False
+        return scenario_includes_kubevirt_dataset(scenario)
 
     # ------------------------------------------------------------------
     # Lifecycle hooks
@@ -202,6 +226,9 @@ class OadpWorkloads(
         """Execute the full OADP workload lifecycle for the configured scenario."""
         test_scenario = self.load_test_scenario()
         self.get_dataset_details(scenario=test_scenario)
+
+        self._reject_kubevirt_if_disabled(test_scenario)
+        self._check_cnv_prerequisite(test_scenario)
 
         self.remove_previous_run_report()
         self.set_velero_stream_source()

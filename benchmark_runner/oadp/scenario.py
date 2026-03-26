@@ -22,6 +22,16 @@ from benchmark_runner.oadp.constants import (
 from benchmark_runner.oadp.oadp_exceptions import OadpError
 
 
+def scenario_includes_kubevirt_dataset(scenario: dict) -> bool:
+    """Return True if the scenario dataset (list or dict) includes role kubevirt."""
+    dataset_value = scenario.get("dataset")
+    if isinstance(dataset_value, list):
+        return any(d.get("role") == VM_DATASET_ROLE for d in dataset_value)
+    if isinstance(dataset_value, dict):
+        return dataset_value.get("role") == VM_DATASET_ROLE
+    return False
+
+
 class OadpScenarioMixin:
     """Scenario YAML loading, validation, dataset helpers, index generation."""
 
@@ -76,8 +86,11 @@ class OadpScenarioMixin:
             if isinstance(dataset, list):
                 check_keys = dataset_keys + ["namespace"]
                 for data in dataset:
-                    if not all(key in data for key in check_keys):
+                    effective_keys = self._effective_dataset_keys(data, check_keys)
+                    if not all(key in data for key in effective_keys):
                         logger.error("Error: Missing dataset key(s) in the scenario.")
+                        return False
+                    if not self._validate_no_shell_metacharacters(data, "dataset"):
                         return False
                     if not self._validate_dataset_entry(data):
                         return False
@@ -85,8 +98,11 @@ class OadpScenarioMixin:
                     logger.error("Error: 'args' key must contain 'namespace_to_backup' when dataset is a list.")
                     return False
             elif isinstance(dataset, dict):
-                if not all(key in dataset for key in dataset_keys):
+                effective_keys = self._effective_dataset_keys(dataset, dataset_keys)
+                if not all(key in dataset for key in effective_keys):
                     logger.error("Error: Missing dataset key(s) in the scenario.")
+                    return False
+                if not self._validate_no_shell_metacharacters(dataset, "dataset"):
                     return False
                 if not self._validate_dataset_entry(dataset):
                     return False
@@ -114,6 +130,13 @@ class OadpScenarioMixin:
         return True
 
     @staticmethod
+    def _effective_dataset_keys(dataset: dict, base_keys: list[str]) -> list[str]:
+        """For VM datasets, accept ``vms_per_namespace`` as alternative to ``pods_per_ns``."""
+        if dataset.get("role") == VM_DATASET_ROLE:
+            return [k for k in base_keys if k != "pods_per_ns"]
+        return base_keys
+
+    @staticmethod
     def _validate_dataset_entry(dataset: dict) -> bool:
         """Validate VM-specific fields when role is 'kubevirt'."""
         if dataset.get("role") == VM_DATASET_ROLE:
@@ -139,9 +162,9 @@ class OadpScenarioMixin:
 
     @staticmethod
     def _validate_no_shell_metacharacters(mapping: dict, context: str) -> bool:
-        """Reject string values containing shell metacharacters (SEC-002)."""
+        """Reject string values containing shell metacharacters or single quotes (SEC-002)."""
         for key, value in mapping.items():
-            if isinstance(value, str) and any(ch in value for ch in SHELL_METACHARACTERS):
+            if isinstance(value, str) and (any(ch in value for ch in SHELL_METACHARACTERS) or "'" in value):
                 logger.error(f"Error: {context} field '{key}' contains forbidden shell metacharacters: {value!r}")
                 return False
         return True
@@ -179,7 +202,9 @@ class OadpScenarioMixin:
                     if existing_namespace_index is not None:
                         existing_entry = all_datasets[existing_namespace_index]
                         existing_entry["total_datasets_for_this_namespace"] += 1
-                        existing_entry["total_pods_per_all_datasets_with_same_namespace"] += dataset["pods_per_ns"]
+                        existing_entry["total_pods_per_all_datasets_with_same_namespace"] += dataset.get(
+                            "pods_per_ns", dataset.get("vms_per_namespace", 0)
+                        )
                         existing_entry["list_of_datasets_which_belong_to_this_namespace"].append(
                             self._process_dataset(dataset, namespace)
                         )
@@ -187,7 +212,9 @@ class OadpScenarioMixin:
                         summary = {
                             "namespace": namespace,
                             "total_datasets_for_this_namespace": 1,
-                            "total_pods_per_all_datasets_with_same_namespace": dataset["pods_per_ns"],
+                            "total_pods_per_all_datasets_with_same_namespace": dataset.get(
+                                "pods_per_ns", dataset.get("vms_per_namespace", 0)
+                            ),
                             "list_of_datasets_which_belong_to_this_namespace": [self._process_dataset(dataset, namespace)],
                             "all_ds_exists": False,
                             "all_ds_validated": False,
@@ -197,12 +224,15 @@ class OadpScenarioMixin:
                 self.print_all_ds(scenario)
             elif isinstance(scenario["dataset"], dict):
                 namespace = scenario["args"].get("namespaces_to_backup", "")
+                ds_dict = scenario["dataset"]
                 summary = {
                     "namespace": namespace,
                     "total_datasets_for_this_namespace": 1,
-                    "total_pods_per_all_datasets_with_same_namespace": scenario["dataset"]["pods_per_ns"],
+                    "total_pods_per_all_datasets_with_same_namespace": ds_dict.get(
+                        "pods_per_ns", ds_dict.get("vms_per_namespace", 0)
+                    ),
                     "list_of_datasets_which_belong_to_this_namespace": [
-                        self._process_dataset(dataset=scenario["dataset"], namespace=namespace)
+                        self._process_dataset(dataset=ds_dict, namespace=namespace)
                     ],
                     "all_ds_exists": False,
                     "all_ds_validated": False,
@@ -316,12 +346,20 @@ class OadpScenarioMixin:
 
     @logger_time_stamp
     def calc_total_pods_per_namespace_in_datasets(self, scenario: dict, namespace: str) -> int:
-        """Sum pods_per_ns for entries matching namespace in list or dict dataset form."""
+        """Sum pods/VMs count for entries matching namespace in list or dict dataset form."""
         dataset_value = scenario.get("dataset")
         if isinstance(dataset_value, list):
-            total_pods = sum(entry.get("pods_per_ns", 0) for entry in dataset_value if entry.get("namespace") == namespace)
+            total_pods = sum(
+                entry.get("pods_per_ns", entry.get("vms_per_namespace", 0))
+                for entry in dataset_value
+                if entry.get("namespace") == namespace
+            )
         elif isinstance(dataset_value, dict):
-            total_pods = dataset_value.get("pods_per_ns", 0) if dataset_value.get("namespace") == namespace else 0
+            total_pods = (
+                dataset_value.get("pods_per_ns", dataset_value.get("vms_per_namespace", 0))
+                if dataset_value.get("namespace") == namespace
+                else 0
+            )
         else:
             total_pods = 0
         logger.info(f"### INFO ### calc_total_pods_per_namespace shows {namespace} has {total_pods}")
@@ -337,10 +375,10 @@ class OadpScenarioMixin:
             for item in test_scenario["dataset"]:
                 namespace = item["namespace"]
                 expected_capacity = item.get("expected_capacity", "0K")
-                pods_per_ns = item["pods_per_ns"]
+                asset_count = item.get("pods_per_ns", item.get("vms_per_namespace", 0))
                 value, unit = self._parse_capacity(expected_capacity)
                 value = self._convert_to_mb(value, unit)
-                ns_capacities[namespace] = ns_capacities.get(namespace, 0) + (value * pods_per_ns)
+                ns_capacities[namespace] = ns_capacities.get(namespace, 0) + (value * asset_count)
 
             total_data = sum(ns_capacities.values())
             ns_capacities["total_data_in_mb"] = total_data
@@ -350,12 +388,13 @@ class OadpScenarioMixin:
             return ns_capacities
 
         elif isinstance(dataset_value, dict):
+            ds_dict = test_scenario["dataset"]
             namespace = test_scenario["args"]["namespaces_to_backup"]
-            expected_capacity = test_scenario["dataset"]["expected_capacity"]
-            pods_per_ns = test_scenario["dataset"]["pods_per_ns"]
+            expected_capacity = ds_dict.get("expected_capacity", "0K")
+            asset_count = ds_dict.get("pods_per_ns", ds_dict.get("vms_per_namespace", 0))
             value, unit = self._parse_capacity(expected_capacity)
             value = self._convert_to_mb(value, unit)
-            ns_capacities[namespace] = value * pods_per_ns
+            ns_capacities[namespace] = value * asset_count
 
             total_data = sum(ns_capacities.values())
             ns_capacities["total_data_in_mb"] = total_data

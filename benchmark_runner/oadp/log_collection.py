@@ -23,8 +23,8 @@ from benchmark_runner.oadp.constants import (
     PLUGIN_KOPIA,
     PLUGIN_VBD,
     SOURCE_UPSTREAM,
-    VM_DATASET_ROLE,
 )
+from benchmark_runner.oadp.scenario import scenario_includes_kubevirt_dataset
 
 
 class OadpLogCollectionMixin:
@@ -460,15 +460,6 @@ class OadpLogCollectionMixin:
         except Exception as err:
             logger.warning(f"collect_vm_pvc_status failed: {err}")
 
-    def _scenario_has_vm_datasets(self, scenario: dict) -> bool:
-        """Return True when any dataset in the scenario uses role 'kubevirt'."""
-        dataset_value = scenario.get("dataset")
-        if isinstance(dataset_value, list):
-            return any(d.get("role") == VM_DATASET_ROLE for d in dataset_value)
-        if isinstance(dataset_value, dict):
-            return dataset_value.get("role") == VM_DATASET_ROLE
-        return False
-
     @logger_time_stamp
     def invoke_vm_log_collection(
         self,
@@ -477,7 +468,7 @@ class OadpLogCollectionMixin:
         velero_ns: str,
     ) -> None:
         """Orchestrate all VM artifact collectors if scenario uses VM datasets."""
-        if not self._scenario_has_vm_datasets(scenario):
+        if not scenario_includes_kubevirt_dataset(scenario):
             return
         self.collect_vm_describe(logs_folder, scenario)
         self.collect_dv_status(logs_folder, scenario)
