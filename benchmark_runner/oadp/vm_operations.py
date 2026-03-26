@@ -1,12 +1,15 @@
 """
 Mixin for KubeVirt VM dataset creation, data population, and lifecycle management.
 
-Delegates to the existing ``Virtctl`` / ``OC`` helpers for VM lifecycle operations
-rather than reimplementing via raw SSH commands.
+Uses the existing ``Virtctl`` / ``OC`` helpers from ``benchmark_runner.common``
+for structured VM lifecycle operations (DV status, VM existence, VM deletion,
+start/stop).  Guest-level operations (``virtctl ssh``) still use raw SSH since
+no ``OC``/``Virtctl`` wrapper exists for arbitrary in-guest commands.
 """
 
 from __future__ import annotations
 
+import os
 import re
 import time
 from pathlib import Path
@@ -14,6 +17,8 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 
 from benchmark_runner.common.logger.logger_time_stamp import logger, logger_time_stamp
+from benchmark_runner.common.oc.oc import OC
+from benchmark_runner.common.virtctl.virtctl import Virtctl
 from benchmark_runner.oadp.constants import (
     SHELL_METACHARACTERS,
     VM_DEFAULT_BATCH_SIZE,
@@ -28,6 +33,14 @@ _TEMPLATES_DIR = Path(__file__).resolve().parent / "vm_templates"
 
 class OadpVmOperationsMixin:
     """KubeVirt VM dataset creation and data population."""
+
+    _virtctl_instance: Virtctl | None = None
+
+    def _get_virtctl(self) -> Virtctl:
+        """Lazily instantiate a Virtctl helper (extends OC, shares SSH run)."""
+        if self._virtctl_instance is None:
+            self._virtctl_instance = Virtctl()
+        return self._virtctl_instance
 
     def _get_jinja_env(self) -> Environment:
         return Environment(
@@ -126,10 +139,10 @@ class OadpVmOperationsMixin:
     # ------------------------------------------------------------------
 
     def _ensure_namespace(self, namespace: str) -> None:
-        ssh = self._OadpWorkloads__ssh
-        existing = ssh.run(cmd=f"oc get ns {namespace} --no-headers 2>/dev/null")
+        oc = self._oc
+        existing = oc.run(cmd=f"oc get ns {namespace} --no-headers 2>/dev/null")
         if namespace not in existing:
-            ssh.run(cmd=f"oc create ns {namespace}")
+            oc.run(cmd=f"oc create ns {namespace}")
             logger.info(f"Created namespace {namespace}")
 
     # ------------------------------------------------------------------
@@ -144,7 +157,7 @@ class OadpVmOperationsMixin:
         sc: str,
     ) -> str:
         """Create the golden OS DataVolume that VMs clone from."""
-        ssh = self._OadpWorkloads__ssh
+        oc = self._oc
         os_config = profile.get("os", {})
         root_disk = next(
             (d for d in profile.get("disks", []) if d.get("boot_order") == 1),
@@ -152,7 +165,7 @@ class OadpVmOperationsMixin:
         )
         dv_name = f"{profile['name']}-os-dv"
 
-        existing = ssh.run(cmd=f"oc get dv {dv_name} -n {namespace} --no-headers 2>/dev/null")
+        existing = oc.run(cmd=f"oc get dv {dv_name} -n {namespace} --no-headers 2>/dev/null")
         if dv_name in existing:
             logger.info(f"OS DataVolume {dv_name} already exists, skipping creation")
             self._wait_for_dv_ready(dv_name, namespace)
@@ -170,26 +183,25 @@ class OadpVmOperationsMixin:
         )
 
         dv_file = f"/tmp/oadp-os-dv-{namespace}.yaml"
-        ssh.run(cmd=f"cat > {dv_file} << 'DVEOF'\n{rendered}\nDVEOF")
-        ssh.run(cmd=f"oc apply -f {dv_file}")
+        oc.run(cmd=f"cat > {dv_file} << 'DVEOF'\n{rendered}\nDVEOF")
+        oc.run(cmd=f"oc apply -f {dv_file}")
         logger.info(f"Created OS DataVolume {dv_name} in {namespace}")
 
         self._wait_for_dv_ready(dv_name, namespace)
         return dv_name
 
     def _wait_for_dv_ready(self, dv_name: str, namespace: str) -> None:
-        ssh = self._OadpWorkloads__ssh
+        """Poll DV phase using OC.check_dv_status pattern with namespace support."""
         timeout = 1800
         elapsed = 0
         while elapsed < timeout:
-            phase = ssh.run(cmd=f"oc get dv {dv_name} -n {namespace} -o jsonpath='{{.status.phase}}' 2>/dev/null")
-            if phase.strip() == "Succeeded":
+            if self._oc.check_dv_status(status="Succeeded", namespace=namespace):
                 logger.info(f"DataVolume {dv_name} is ready")
                 return
-            time.sleep(15)
-            elapsed += 15
+            time.sleep(OC.SLEEP_TIME * 5)
+            elapsed += OC.SLEEP_TIME * 5
             if elapsed % 60 == 0:
-                logger.info(f"Waiting for DV {dv_name}: phase={phase}, elapsed={elapsed}s/{timeout}s")
+                logger.info(f"Waiting for DV {dv_name}: elapsed={elapsed}s/{timeout}s")
         msg = f"DataVolume {dv_name} did not reach Succeeded within {timeout}s"
         logger.error(msg)
         self.fail_test_run(msg)
@@ -210,8 +222,13 @@ class OadpVmOperationsMixin:
         throttle_batches: int,
         scenario: dict,
     ) -> None:
-        """Apply VM manifests in batches with throttle gates."""
-        ssh = self._OadpWorkloads__ssh
+        """Apply VM manifests in batches with throttle gates.
+
+        Uses ``oc apply`` via ``self._oc.run(background=True)`` for async batch
+        creation.  Direct ``OC.create_vm_sync`` is not used here because it
+        waits synchronously per VM — incompatible with batch concurrency.
+        """
+        oc = self._oc
         env = self._get_jinja_env()
         template = env.get_template("vm_template.yaml")
 
@@ -250,8 +267,8 @@ class OadpVmOperationsMixin:
             )
 
             vm_file = f"/tmp/oadp-vm-{namespace}-{i}.yaml"
-            ssh.run(cmd=f"cat > {vm_file} << 'VMEOF'\n{rendered}\nVMEOF")
-            ssh.run(cmd=f"oc apply -f {vm_file}", background=True)
+            oc.run(cmd=f"cat > {vm_file} << 'VMEOF'\n{rendered}\nVMEOF")
+            oc.run(cmd=f"oc apply -f {vm_file}", background=True)
 
             if (i + 1) % batch_size == 0:
                 batch_count += 1
@@ -287,8 +304,7 @@ class OadpVmOperationsMixin:
         return False
 
     def _count_running_vmis(self, namespace: str) -> int:
-        ssh = self._OadpWorkloads__ssh
-        result = ssh.run(cmd=f"oc get vmi -n {namespace} --no-headers 2>/dev/null | grep -c Running")
+        result = self._oc.run(cmd=f"oc get vmi -n {namespace} --no-headers 2>/dev/null | grep -c Running")
         try:
             return int(result.strip())
         except (ValueError, AttributeError):
@@ -309,8 +325,8 @@ class OadpVmOperationsMixin:
             if count >= expected_count:
                 logger.info(f"All {expected_count} VMIs running in {namespace}")
                 return True
-            time.sleep(15)
-            elapsed += 15
+            time.sleep(OC.SLEEP_TIME * 5)
+            elapsed += OC.SLEEP_TIME * 5
             if elapsed % 60 == 0:
                 logger.info(f"Waiting for VMIs: {count}/{expected_count} running, elapsed={elapsed}s")
         logger.error(f"Only {self._count_running_vmis(namespace)}/{expected_count} VMIs running after {timeout}s")
@@ -318,11 +334,10 @@ class OadpVmOperationsMixin:
 
     def _wait_for_guest_agents(self, namespace: str, expected_count: int) -> None:
         """Wait until qemu-guest-agent is connected on all VMIs."""
-        ssh = self._OadpWorkloads__ssh
-        timeout = 600
+        timeout = OC.SHORT_TIMEOUT
         elapsed = 0
         while elapsed < timeout:
-            result = ssh.run(
+            result = self._oc.run(
                 cmd=f"oc get vmi -n {namespace} -o jsonpath="
                 f"'{{.items[*].status.conditions[?(@.type==\"AgentConnected\")].status}}'"
             )
@@ -331,8 +346,8 @@ class OadpVmOperationsMixin:
             if true_count >= expected_count:
                 logger.info(f"Guest agents connected on all {expected_count} VMIs")
                 return
-            time.sleep(10)
-            elapsed += 10
+            time.sleep(OC.SLEEP_TIME * 3)
+            elapsed += OC.SLEEP_TIME * 3
         logger.warning(f"Guest agent timeout: only {true_count}/{expected_count} connected after {timeout}s")
 
     # ------------------------------------------------------------------
@@ -347,8 +362,13 @@ class OadpVmOperationsMixin:
         total_vms: int,
         scenario: dict,
     ) -> None:
-        """Run data generation commands concurrently on all VMs."""
-        ssh = self._OadpWorkloads__ssh
+        """Run data generation commands concurrently on all VMs.
+
+        Uses ``virtctl ssh`` via ``self._oc.run()`` for in-guest command
+        execution.  No ``Virtctl``/``OC`` helper exists for arbitrary guest
+        commands, so raw command construction is required here.
+        """
+        oc = self._oc
         concurrency = int(
             scenario["args"].get(
                 "vm_population_concurrency",
@@ -368,7 +388,7 @@ class OadpVmOperationsMixin:
             if not cmd:
                 continue
 
-            ssh.run(
+            oc.run(
                 cmd=f"virtctl ssh {ssh_user}@{vm_name} -n {namespace} --command '{cmd}' &",
                 background=True,
             )
@@ -376,7 +396,7 @@ class OadpVmOperationsMixin:
 
             if len(pending_vms) >= concurrency:
                 self._wait_for_data_gen_batch(
-                    ssh,
+                    oc,
                     namespace,
                     pending_vms,
                     ssh_user,
@@ -387,7 +407,7 @@ class OadpVmOperationsMixin:
 
         if pending_vms:
             self._wait_for_data_gen_batch(
-                ssh,
+                oc,
                 namespace,
                 pending_vms,
                 ssh_user,
@@ -428,13 +448,12 @@ class OadpVmOperationsMixin:
 
     _DATA_GEN_PROCESS_PATTERNS = {
         "hammerdb": "hammerdb|run_tpcc",
-        # Match guest dd line: spaces between argv tokens (not dd.if=)
         "dd": r"dd.*fill\.dat",
     }
 
     def _wait_for_data_gen_batch(
         self,
-        ssh: object,
+        oc: object,
         namespace: str,
         vm_names: list[str],
         ssh_user: str,
@@ -449,7 +468,7 @@ class OadpVmOperationsMixin:
         while remaining and elapsed < timeout:
             still_running = []
             for vm_name in remaining:
-                result = ssh.run(
+                result = oc.run(
                     cmd=f"virtctl ssh {ssh_user}@{vm_name} -n {namespace} "
                     f"--command 'pgrep -fc \"{process_pattern}\" || echo 0'"
                 )

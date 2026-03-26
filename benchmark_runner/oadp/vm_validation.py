@@ -130,8 +130,7 @@ class OadpVmValidationMixin:
     # ------------------------------------------------------------------
 
     def _check_vm_count(self, namespace: str, expected: int) -> bool:
-        ssh = self._OadpWorkloads__ssh
-        result = ssh.run(cmd=f"oc get vm -n {namespace} --no-headers 2>/dev/null | wc -l")
+        result = self._oc.run(cmd=f"oc get vm -n {namespace} --no-headers 2>/dev/null | wc -l")
         try:
             count = int(result.strip())
         except (ValueError, AttributeError):
@@ -142,8 +141,7 @@ class OadpVmValidationMixin:
         return True
 
     def _check_all_vmis_running(self, namespace: str, expected: int) -> bool:
-        ssh = self._OadpWorkloads__ssh
-        result = ssh.run(cmd=f"oc get vmi -n {namespace} --no-headers 2>/dev/null | grep -c Running")
+        result = self._oc.run(cmd=f"oc get vmi -n {namespace} --no-headers 2>/dev/null | grep -c Running")
         try:
             count = int(result.strip())
         except (ValueError, AttributeError):
@@ -193,8 +191,7 @@ class OadpVmValidationMixin:
         profile: dict,
     ) -> bool:
         """Check per-disk expected_capacity via ``df -BG`` with 20% tolerance."""
-        ssh = self._OadpWorkloads__ssh
-        ssh_user = VM_DEFAULT_SSH_USER
+        ssh_user = self._ssh_user_from_profile(profile) if hasattr(self, '_ssh_user_from_profile') else VM_DEFAULT_SSH_USER
 
         for disk in profile.get("disks", []):
             expected = disk.get("expected_capacity")
@@ -204,7 +201,7 @@ class OadpVmValidationMixin:
 
             self._validate_shell_safe_value("validation_path", validation_path)
 
-            result = ssh.run(
+            result = self._oc.run(
                 cmd=f"virtctl ssh {ssh_user}@{vm_name} -n {namespace} --command 'df -BG {validation_path} | tail -1'"
             )
             actual_gb = self._parse_df_used_gb(result)
