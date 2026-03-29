@@ -124,6 +124,15 @@ class OadpScenarioMixin:
             if not self._validate_no_shell_metacharacters(args, "args"):
                 return False
 
+        if scenario_includes_kubevirt_dataset(scenario):
+            kubevirt_plugin = scenario.get("args", {}).get("kubevirt_plugin", False)
+            if not kubevirt_plugin:
+                logger.error(
+                    "Error: Scenario with dataset role 'kubevirt' requires 'kubevirt_plugin: true' in args. "
+                    "Without the kubevirt Velero plugin, VM backups will be incomplete."
+                )
+                return False
+
         if not self._validate_no_shell_metacharacters(scenario, "scenario"):
             return False
 
