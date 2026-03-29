@@ -57,7 +57,7 @@ class EnvironmentVariables:
         self._environment_variables_dict['oadp_velero_ns'] = EnvironmentVariables.get_env('OADP_VELERO_NS', 'openshift-adp')
         self._environment_variables_dict['oadp_label_name'] = EnvironmentVariables.get_env('OADP_LABEL_NAME', '')
         self._environment_variables_dict['oadp_label_value'] = EnvironmentVariables.get_env('OADP_LABEL_VALUE', '')
-        self._environment_variables_dict['oadp_enable_kubevirt'] = EnvironmentVariables.get_boolean_from_environment('OADP_ENABLE_KUBEVIRT', False)
+        self._environment_variables_dict['oadp_enable_kubevirt'] = EnvironmentVariables.get_boolean_from_environment('OADP_ENABLE_KUBEVIRT', True)
         self._environment_variables_dict['validation_mode'] = EnvironmentVariables.get_env('VALIDATION_MODE', 'light')
         # PIN=node selector
         self._environment_variables_dict['pin_node_benchmark_operator'] = EnvironmentVariables.get_env('PIN_NODE_BENCHMARK_OPERATOR', 'worker000-r640')

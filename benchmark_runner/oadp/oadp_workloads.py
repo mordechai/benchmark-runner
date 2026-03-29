@@ -171,21 +171,31 @@ class OadpWorkloads(
             self.fail_test_run(msg)
             raise RuntimeError(msg)
 
+    _CNV_OPERATIONAL_PHASES = frozenset({"Succeeded", "Replacing"})
+
     def _check_cnv_prerequisite(self, scenario: dict) -> None:
-        """Verify CNV operator is installed when the scenario uses VM datasets."""
+        """Verify CNV operator is installed when the scenario uses VM datasets.
+
+        Checks ALL CSVs in ``openshift-cnv`` and accepts any phase that
+        indicates the operator is functional: ``Succeeded`` (normal) or
+        ``Replacing`` (upgrade in progress — operator still operational).
+        """
         if not self._scenario_has_vm_datasets(scenario):
             return
-        result = self.__ssh.run(cmd="oc get csv -n openshift-cnv -o jsonpath='{.items[0].status.phase}' 2>/dev/null")
-        if "Succeeded" not in result:
+        result = self.__ssh.run(
+            cmd="oc get csv -n openshift-cnv -o jsonpath='{.items[*].status.phase}' 2>/dev/null"
+        )
+        phases = result.strip().strip("'").split()
+        if not any(p in self._CNV_OPERATIONAL_PHASES for p in phases):
             msg = (
                 "OpenShift Virtualization (CNV) operator is not installed or not ready "
                 "in namespace 'openshift-cnv'. VM scenarios require CNV. "
-                f"CSV phase check returned: {result.strip()!r}"
+                f"CSV phases found: {phases!r} (need one of {sorted(self._CNV_OPERATIONAL_PHASES)})"
             )
             logger.error(msg)
             self.fail_test_run(msg)
             raise RuntimeError(msg)
-        logger.info("CNV operator pre-check passed: CSV phase is Succeeded")
+        logger.info(f"CNV operator pre-check passed: CSV phases {phases}")
 
     def _scenario_has_vm_datasets(self, scenario: dict) -> bool:
         """Return True when the feature flag is on and scenario contains VM datasets."""

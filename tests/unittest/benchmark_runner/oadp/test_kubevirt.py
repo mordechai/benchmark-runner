@@ -102,7 +102,7 @@ class OadpWorkloads:
         }
         self.__scenario_datasets = []
         self.__oadp_ds_failing_validation = []
-        self.__oadp_enable_kubevirt = False
+        self.__oadp_enable_kubevirt = True
         self.__retry_logic = {"interval_between_checks": 5, "max_attempts": 1}
         self.__ssh = MagicMock()
         self._oc = MagicMock()
