@@ -142,7 +142,8 @@ class OadpVmOperationsMixin:
         oc = self._oc
         existing = oc.run(cmd=f"oc get ns {namespace} --no-headers 2>/dev/null")
         if namespace not in existing:
-            oc.run(cmd=f"oc create ns {namespace}")
+            result = oc.run(cmd=f"oc create ns {namespace}")
+            logger.info(f"oc create ns result: {result}")
             logger.info(f"Created namespace {namespace}")
 
     # ------------------------------------------------------------------
@@ -183,8 +184,13 @@ class OadpVmOperationsMixin:
         )
 
         dv_file = f"/tmp/oadp-os-dv-{namespace}.yaml"
-        oc.run(cmd=f"cat > {dv_file} << 'DVEOF'\n{rendered}\nDVEOF")
-        oc.run(cmd=f"oc apply -f {dv_file}")
+        with open(dv_file, "w") as f:
+            f.write(rendered)
+        logger.info(f"Wrote DV manifest to {dv_file}")
+        apply_result = oc.run(cmd=f"oc apply -f {dv_file}")
+        logger.info(f"oc apply result for DV {dv_name}: {apply_result}")
+        if "error" in str(apply_result).lower() or "invalid" in str(apply_result).lower():
+            self.fail_test_run(f"Failed to create DataVolume {dv_name}: {apply_result}")
         logger.info(f"Created OS DataVolume {dv_name} in {namespace}")
 
         self._wait_for_dv_ready(dv_name, namespace)
@@ -267,8 +273,10 @@ class OadpVmOperationsMixin:
             )
 
             vm_file = f"/tmp/oadp-vm-{namespace}-{i}.yaml"
-            oc.run(cmd=f"cat > {vm_file} << 'VMEOF'\n{rendered}\nVMEOF")
-            oc.run(cmd=f"oc apply -f {vm_file}", background=True)
+            with open(vm_file, "w") as f:
+                f.write(rendered)
+            apply_result = oc.run(cmd=f"oc apply -f {vm_file}")
+            logger.info(f"oc apply result for VM {vm_name}: {apply_result}")
 
             if (i + 1) % batch_size == 0:
                 batch_count += 1

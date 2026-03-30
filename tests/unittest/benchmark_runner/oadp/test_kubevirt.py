@@ -714,6 +714,57 @@ class TestCalcTotalPodsPerNamespaceFallback:
 # ===========================================================================
 
 
+# ===========================================================================
+# 14. _validate_vm_dataset existence checks vs data checks
+# ===========================================================================
+
+
+class TestValidateVmDatasetExistenceChecks:
+    """Verify that existence checks (VM count, VMI running) always run,
+    even when validation_mode is 'none'.  Only data-level checks should
+    be skipped by validation_mode=none."""
+
+    @pytest.fixture
+    def mx(self):
+        obj = TestableVmValidation()
+        return obj
+
+    def _ds(self, namespace="vm-ns", vms=2):
+        return {
+            "role": "kubevirt",
+            "vm_profile": "rhel9-hammerdb-mariadb",
+            "vms_per_namespace": vms,
+            "sc": "ocs-storagecluster-ceph-rbd-virtualization",
+            "namespace": namespace,
+        }
+
+    def test_none_mode_returns_false_when_vms_missing(self, mx):
+        """validation_mode=none must still detect that VMs don't exist."""
+        mx.get_dataset_validation_mode = lambda ds: "none"
+        # _check_vm_count returns "0" → VMs don't exist
+        mx._oc.run.return_value = "0"
+        scenario = _kubevirt_scenario()
+        result = mx._validate_vm_dataset(scenario, self._ds())
+        assert result is False
+
+    def test_none_mode_returns_true_when_vms_exist(self, mx):
+        """validation_mode=none skips data checks but passes when VMs exist and are running."""
+        mx.get_dataset_validation_mode = lambda ds: "none"
+        # First call: _check_vm_count returns "2", second call: _check_all_vmis_running returns "2"
+        mx._oc.run.side_effect = ["2", "2"]
+        scenario = _kubevirt_scenario()
+        result = mx._validate_vm_dataset(scenario, self._ds())
+        assert result is True
+
+    def test_light_mode_returns_false_when_vms_missing(self, mx):
+        """light mode also fails when VMs don't exist (existence check first)."""
+        mx.get_dataset_validation_mode = lambda ds: "light"
+        mx._oc.run.return_value = "0"
+        scenario = _kubevirt_scenario()
+        result = mx._validate_vm_dataset(scenario, self._ds())
+        assert result is False
+
+
 class TestConstants:
     def test_kubevirt_in_known_plugins(self):
         assert "kubevirt" in KNOWN_PLUGINS

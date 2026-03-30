@@ -97,25 +97,27 @@ class OadpVmValidationMixin:
 
     @logger_time_stamp
     def _validate_vm_dataset(self, scenario: dict, ds: dict) -> bool:
-        """Validate a single VM dataset: count, running state, guest agent, data."""
+        """Validate a single VM dataset: count, running state, guest agent, data.
+
+        Existence checks (VM count, VMI running state) always run regardless
+        of validation_mode — they determine whether VMs need to be created.
+        Only data-level checks (disk capacity) are governed by validation_mode.
+        """
         namespace = ds["namespace"]
         expected_vms = ds.get("vms_per_namespace", ds.get("pods_per_ns", 1))
         validation_mode = self.get_dataset_validation_mode(ds)
-        skip = scenario["args"].get("skip_source_dataset_check", False)
 
-        if skip:
-            logger.warning("Skipping VM dataset validation (skip_source_dataset_check=True)")
-            return True
-
-        if validation_mode == VALIDATION_MODE_NONE:
-            logger.warning("VM dataset validation mode is 'none' — skipping all checks")
-            return True
-
+        # Existence checks always run — without these, VMs will never be created
         if not self._check_vm_count(namespace, expected_vms):
             return False
 
         if not self._check_all_vmis_running(namespace, expected_vms):
             return False
+
+        # Data-level validation is governed by validation_mode
+        if validation_mode == VALIDATION_MODE_NONE:
+            logger.info("VM dataset validation mode is 'none' — skipping data checks (VMs exist)")
+            return True
 
         if validation_mode == VALIDATION_MODE_LIGHT:
             return self._validate_vm_data_sample(ds, namespace, expected_vms)
