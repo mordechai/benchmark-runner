@@ -7,6 +7,7 @@ import random
 
 import pytest
 
+from benchmark_runner.oadp.environment import OadpEnvironmentMixin
 from benchmark_runner.oadp.execution import OadpExecutionMixin
 from benchmark_runner.oadp.pod_validation import OadpPodValidationMixin
 from benchmark_runner.oadp.resources import OadpResourcesMixin
@@ -42,6 +43,13 @@ class OadpWorkloads:
         return "test"
 
 
+class TestableEnvironment(OadpEnvironmentMixin, OadpWorkloads):
+    __test__ = False
+
+    def __init__(self):
+        OadpWorkloads.__init__(self)
+
+
 class TestableResources(OadpResourcesMixin, OadpWorkloads):
     __test__ = False
 
@@ -61,6 +69,30 @@ class TestableExecution(OadpExecutionMixin, OadpWorkloads):
 
     def __init__(self):
         OadpWorkloads.__init__(self)
+
+
+# --- environment.OadpEnvironmentMixin ---
+
+
+class TestParseVersionFromCsv:
+    def test_standard_patch_version(self):
+        assert OadpEnvironmentMixin._parse_version_from_csv("oadp-operator.v1.4.1") == "1.4.1"
+
+    def test_stage_version_160(self):
+        assert OadpEnvironmentMixin._parse_version_from_csv("oadp-operator.v1.6.0") == "1.6.0"
+
+    def test_minor_version_only(self):
+        assert OadpEnvironmentMixin._parse_version_from_csv("oadp-operator.v2.0") == "2.0"
+
+    def test_no_match_returns_empty_string(self):
+        assert OadpEnvironmentMixin._parse_version_from_csv("unexpected-format") == ""
+
+    def test_empty_string_returns_empty_string(self):
+        assert OadpEnvironmentMixin._parse_version_from_csv("") == ""
+
+    def test_csv_with_build_suffix_extracts_version(self):
+        csv = "oadp-operator.v1.6.0-0.1234567890abcdef"
+        assert OadpEnvironmentMixin._parse_version_from_csv(csv) == "1.6.0"
 
 
 # --- resources.OadpResourcesMixin ---
