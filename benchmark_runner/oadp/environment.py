@@ -304,6 +304,17 @@ class OadpEnvironmentMixin:
             self.fail_test_run(f" {err} occurred in " + self.get_current_function())
             raise err
 
+    @staticmethod
+    def _parse_version_from_csv(csv_name: str) -> str:
+        """Return the dotted version string from an OADP ClusterServiceVersion name.
+
+        Parses names of the form 'oadp-operator.vX.Y.Z'.  Returns an empty string
+        when the name does not match the expected pattern so callers are not exposed
+        to AttributeError on unexpected CSV names.
+        """
+        match = re.search(r"\w+-\w+\.\w([\d\.]+)", csv_name)
+        return match.group(1) if match else ""
+
     @logger_time_stamp
     def oadp_get_version_info(self) -> None:
         """Collect OADP operator image, CSV, subscription, catalog, and cluster topology into metadata."""
@@ -350,33 +361,28 @@ class OadpEnvironmentMixin:
                 cmd=f"oc get subscription.operators.coreos.com {oadp_subscription_used} "
                 f"--namespace {test_env['velero_ns']} -o jsonpath={jsonpath_oadp_catalog_source}"
             )
+            oadp_details["oadp"]["oadp_iib_cmd"] = "0"
+
             if oadp_catalog_source != "":
                 oadp_details["oadp"]["catalog_source"] = oadp_catalog_source
-                jsonpath_oadp_iib = "'{.spec.image}'"
-                oadp_iib_cmd = ssh.run(
-                    cmd=f"oc get catsrc {oadp_catalog_source} -n openshift-marketplace "
-                    f"-o jsonpath={jsonpath_oadp_iib} --ignore-not-found | grep -Eo 'iib:[0-9]+'"
+                stage_version = ssh.run(
+                    cmd=f"oc get catalogsources.operators.coreos.com {oadp_catalog_source} "
+                    f"-n openshift-marketplace -o yaml | grep 'image:' | grep 'oadp' "
+                    r"| grep -oP '[0-9]+\.[0-9]+\.[0-9]+-[0-9]{12}'"
                 )
-                if oadp_iib_cmd != "":
-                    oadp_internal_build = ssh.run(
-                        cmd="curl -s -k https://datagrepper.engineering.redhat.com/raw"
-                        r"\?topic\=/topic/VirtualTopic.eng.ci.redhat-container-image.index.built"
-                        rf"\&contains\={oadp_iib_cmd}\&rows_per_page\=1\&delta\=15552000"
-                        " | jq -r '.raw_messages[0].msg.artifact.nvr'"
-                    )
-                    if oadp_internal_build != "":
-                        logger.info(f"DataGrepper Curl command returned {oadp_internal_build}")
-                        if "oadp-operator-bundle-container-" in oadp_internal_build:
-                            oadp_details["oadp"]["internal_build"] = oadp_internal_build.split(
-                                "oadp-operator-bundle-container-"
-                            )[1]
-                        if "iib:" in oadp_iib_cmd:
-                            oadp_details["oadp"]["iib"] = oadp_iib_cmd.split("iib:")[1]
             else:
-                oadp_details["oadp"]["internal_build"] = re.search(r"\w+-\w+\.\w([\d\.]+)", oadp_csv).group(1)
+                stage_version = ""
+
+            if stage_version:
+                oadp_details["oadp"]["internal_build"] = stage_version
+                logger.info(f"::: INFO :: OADP stage build version: {stage_version}")
+            else:
+                version = self._parse_version_from_csv(oadp_csv)
+                if version:
+                    oadp_details["oadp"]["internal_build"] = version + "-GA"
                 logger.info(
-                    f"::: INFO :: OADP internal build not available will parse from operator csv "
-                    f"for major version {oadp_details['oadp']['internal_build']}"
+                    f"::: INFO :: OADP GA version: "
+                    f"{oadp_details['oadp'].get('internal_build', 'unknown')}"
                 )
 
             jsonpath_cluster_name = "'{print $2}'"
