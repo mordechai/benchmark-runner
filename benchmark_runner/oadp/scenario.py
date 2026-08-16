@@ -15,6 +15,7 @@ from benchmark_runner.oadp.constants import (
     ES_INDEX_PREFIX_DOWNSTREAM,
     ES_INDEX_PREFIX_UPSTREAM,
     KNOWN_PLUGINS,
+    PLUGIN_KUBEVIRT,
     SHELL_METACHARACTERS,
     SOURCE_UPSTREAM,
     VM_DATASET_ROLE,
@@ -125,11 +126,11 @@ class OadpScenarioMixin:
                 return False
 
         if scenario_includes_kubevirt_dataset(scenario):
-            kubevirt_plugin = scenario.get("args", {}).get("kubevirt_plugin", False)
-            if not kubevirt_plugin:
+            plugin = scenario.get("args", {}).get("plugin", "")
+            if plugin != PLUGIN_KUBEVIRT:
                 logger.error(
-                    "Error: Scenario with dataset role 'kubevirt' requires 'kubevirt_plugin: true' in args. "
-                    "Without the kubevirt Velero plugin, VM backups will be incomplete."
+                    f"Error: Scenario with dataset role 'kubevirt' requires 'plugin: kubevirt' in args, "
+                    f"got 'plugin: {plugin}'. The kubevirt Velero plugin is needed for VM backups."
                 )
                 return False
 

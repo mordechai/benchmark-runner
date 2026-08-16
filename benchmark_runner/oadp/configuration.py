@@ -125,7 +125,7 @@ class OadpConfigurationMixin:
             bucket_name = dpa_data["spec"]["backupLocations"][0]["velero"]["objectStorage"]["bucket"]
             config_profile = dpa_data["spec"]["backupLocations"][0]["velero"]["config"]["profile"]
             cred_name = dpa_data["spec"]["backupLocations"][0]["velero"]["credential"]["name"]
-            if scenario["args"]["plugin"] in (PLUGIN_CSI, PLUGIN_VBD):
+            if scenario["args"]["plugin"] in (PLUGIN_CSI, PLUGIN_VBD, PLUGIN_KUBEVIRT):
                 uploader_type = "kopia"
             else:
                 uploader_type = scenario["args"]["plugin"]
@@ -296,13 +296,8 @@ class OadpConfigurationMixin:
 
     @staticmethod
     def _scenario_needs_kubevirt_plugin(scenario: dict) -> bool:
-        """Return True when any dataset in the scenario uses role 'kubevirt'."""
-        dataset_value = scenario.get("dataset")
-        if isinstance(dataset_value, list):
-            return any(d.get("role") == VM_DATASET_ROLE for d in dataset_value)
-        if isinstance(dataset_value, dict):
-            return dataset_value.get("role") == VM_DATASET_ROLE
-        return False
+        """Return True when the scenario uses the kubevirt Velero plugin."""
+        return scenario.get("args", {}).get("plugin") == PLUGIN_KUBEVIRT
 
     @logger_time_stamp
     def validate_dpa_structure(self, oadp_namespace: str) -> bool:

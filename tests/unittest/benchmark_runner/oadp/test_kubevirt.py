@@ -28,8 +28,7 @@ from benchmark_runner.oadp.vm_validation import OadpVmValidationMixin
 
 def _valid_args(**overrides):
     base = {
-        "plugin": "csi",
-        "kubevirt_plugin": True,
+        "plugin": "kubevirt",
         "use_cli": True,
         "OADP_CR_TYPE": "backup",
         "OADP_CR_NAME": "backup-kubevirt-test",
@@ -229,21 +228,19 @@ class TestScenarioValidationKubevirt:
                 s["dataset"]["role"] = "kubevirt"
                 s["dataset"]["vm_profile"] = "p"
                 s["dataset"]["vms_per_namespace"] = 1
-                s["args"]["kubevirt_plugin"] = True
             assert mx.validate_scenario(s) is True, f"Plugin {plugin} should be accepted"
 
-    def test_kubevirt_missing_kubevirt_plugin_arg_fails(self, mx):
-        s = _kubevirt_scenario()
-        del s["args"]["kubevirt_plugin"]
+    def test_kubevirt_dataset_with_wrong_plugin_fails(self, mx):
+        s = _kubevirt_scenario(args=_valid_args(plugin="csi"))
         assert mx.validate_scenario(s) is False
 
-    def test_kubevirt_with_kubevirt_plugin_false_fails(self, mx):
-        s = _kubevirt_scenario(args=_valid_args(kubevirt_plugin=False))
+    def test_kubevirt_dataset_with_kopia_plugin_fails(self, mx):
+        s = _kubevirt_scenario(args=_valid_args(plugin="kopia"))
         assert mx.validate_scenario(s) is False
 
-    def test_pod_scenario_without_kubevirt_plugin_passes(self, mx):
+    def test_pod_scenario_with_non_kubevirt_plugin_passes(self, mx):
         s = _pod_scenario()
-        assert "kubevirt_plugin" not in s["args"]
+        assert s["args"]["plugin"] != "kubevirt"
         assert mx.validate_scenario(s) is True
 
 
