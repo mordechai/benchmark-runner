@@ -8,7 +8,7 @@
 
 Ticket 029 wired multi-NS (`ns` > 1) for population + backup CR `includedNamespaces`, but cleanup / log collection / reporting still keyed off the single `namespaces_to_backup` (ns1). Ticket 028 wired `--resource-policies-configmap` into `exec_backup()` only — Flow2 restores were left untouched. Also, with Phase 1 VM backup/restore supported, the `OADP_ENABLE_KUBEVIRT` default should flip from opt-in (`False`) to on (`True`).
 
-Resolve: sibling namespaces are cleaned/logged/reported; Flow2 restores get the same resource-policy flag as backups; feature flag defaults to `True`.
+Resolve: sibling namespaces are cleaned/logged/reported; feature flag defaults to `True`. Flow2 `kubevirt-volume-policy` stays **backup-only** (do not attach on restore — Velero rejects `volumePolicies` on restore with `FailedValidation`).
 
 ## Answer
 
@@ -22,8 +22,8 @@ Resolve: sibling namespaces are cleaned/logged/reported; Flow2 restores get the 
 - `reporting.py`: `enrich_summary_with_vm_metadata` sums VM/VMI/DV counts across siblings.
 - `pod_validation.py`: dict-form dataset validation loops expanded namespaces.
 
-**Flow2 restore:** `exec_restore(..., resource_policy_configmap=None)` appends `--resource-policies-configmap` on downstream restores when set. `oadp_execute_scenario()` restore branch uses the same CBT predicate as backup (`_scenario_needs_kubevirt_datamover_plugin`). Upstream restore unchanged (Velero 1.12).
+**Flow2 resource-policy (correction):** Ticket 028 correctly scoped `--resource-policies-configmap` / `kubevirt-volume-policy` to **CBT kubevirt backup only**. An earlier closeout mistakenly mirrored that flag onto `exec_restore()`; Velero returns `volumePolicies are not supported for restore`. Restore no longer accepts or passes `resource_policy_configmap`. Backup path unchanged.
 
-**tests.yaml:** `ns` > 1 scenarios already present in mpqe-scale-scripts (TC 10.8 CBT 3ns, TC 10.9 Flow1 3ns); unit tests cover those shapes. New unit tests cover cleanup loops, reporting aggregation, log collectors, `exec_restore` flag, and restore wiring.
+**tests.yaml:** `ns` > 1 scenarios already present in mpqe-scale-scripts (TC 10.8 CBT 3ns, TC 10.9 Flow1 3ns); unit tests cover those shapes. New unit tests cover cleanup loops, reporting aggregation, log collectors, and assert restore never gets the resource-policy flag.
 
 Full `test_kubevirt.py`: 266 passed.
