@@ -2090,7 +2090,7 @@ class TestOadpExecuteScenarioMultiNamespaceIncludeNamespaces:
 
 
 # ===========================================================================
-# Phase 1 closeout: multi-ns cleanup/logs/reporting + Flow2 restore resourcePolicy
+# Phase 1 closeout: multi-ns cleanup/logs/reporting; Flow2 ConfigMap is backup-only
 # ===========================================================================
 
 
@@ -2197,6 +2197,8 @@ class TestLogCollectionMultiNamespace:
 
 
 class TestExecRestoreResourcePolicy:
+    """Flow2 resource-policy ConfigMap is backup-only; restore must never get it."""
+
     @pytest.fixture
     def mx(self):
         m = TestableExecution()
@@ -2204,35 +2206,23 @@ class TestExecRestoreResourcePolicy:
         m._OadpWorkloads__ssh.run.return_value = 'Restore request "r1" submitted successfully.'
         return m
 
-    def test_downstream_cbt_restore_gets_resource_policy_flag(self, mx):
-        mx.exec_restore(
-            plugin="kubevirt",
-            restore_name="r1",
-            backup_name="b1",
-            resource_policy_configmap=KUBEVIRT_VOLUME_POLICY_CONFIGMAP_NAME,
-        )
-        cmd = mx._OadpWorkloads__ssh.run.call_args.kwargs["cmd"]
-        assert f"--resource-policies-configmap {KUBEVIRT_VOLUME_POLICY_CONFIGMAP_NAME}" in cmd
-
-    def test_downstream_restore_without_policy_omits_flag(self, mx):
+    def test_downstream_restore_never_gets_resource_policy_flag(self, mx):
         mx.exec_restore(plugin="kubevirt", restore_name="r1", backup_name="b1")
         cmd = mx._OadpWorkloads__ssh.run.call_args.kwargs["cmd"]
         assert "--resource-policies-configmap" not in cmd
+        assert "restore create r1 --from-backup b1" in cmd
 
     def test_upstream_restore_never_gets_resource_policy_flag(self, mx):
         mx._OadpWorkloads__test_env["source"] = "upstream"
         mx._OadpWorkloads__test_env["velero_cli_path"] = "/tmp/velero-1-12"
-        mx.exec_restore(
-            plugin="kubevirt",
-            restore_name="r1",
-            backup_name="b1",
-            resource_policy_configmap=KUBEVIRT_VOLUME_POLICY_CONFIGMAP_NAME,
-        )
+        mx.exec_restore(plugin="kubevirt", restore_name="r1", backup_name="b1")
         cmd = mx._OadpWorkloads__ssh.run.call_args.kwargs["cmd"]
         assert "--resource-policies-configmap" not in cmd
 
 
 class TestOadpExecuteScenarioRestoreResourcePolicyWiring:
+    """oadp_execute_scenario restore path must not pass resource_policy_configmap."""
+
     @pytest.fixture
     def mx(self):
         m = TestableExecution()
@@ -2250,15 +2240,17 @@ class TestOadpExecuteScenarioRestoreResourcePolicyWiring:
         s["args"]["vm_population_script_args"]["cbt"] = cbt
         return s
 
-    def test_cbt_restore_passes_resource_policy_configmap(self, mx):
+    def test_cbt_restore_does_not_pass_resource_policy_configmap(self, mx):
         mx.oadp_execute_scenario(self._restore_scenario(cbt=True), run_method="python")
         call_kwargs = mx.exec_restore.call_args.kwargs
-        assert call_kwargs["resource_policy_configmap"] == KUBEVIRT_VOLUME_POLICY_CONFIGMAP_NAME
+        assert "resource_policy_configmap" not in call_kwargs
+        assert call_kwargs["plugin"] == "kubevirt"
+        assert call_kwargs["restore_name"] == "restore-kubevirt-script"
 
-    def test_non_cbt_restore_passes_none(self, mx):
+    def test_non_cbt_restore_does_not_pass_resource_policy_configmap(self, mx):
         mx.oadp_execute_scenario(self._restore_scenario(cbt=False), run_method="python")
         call_kwargs = mx.exec_restore.call_args.kwargs
-        assert call_kwargs["resource_policy_configmap"] is None
+        assert "resource_policy_configmap" not in call_kwargs
 
 
 class TestMultiNsScenariosFromTestsYamlShapes:
