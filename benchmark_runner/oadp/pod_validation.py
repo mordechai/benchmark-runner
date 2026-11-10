@@ -8,6 +8,7 @@ import time
 
 from benchmark_runner.common.logger.logger_time_stamp import logger, logger_time_stamp
 from benchmark_runner.oadp.constants import VALIDATION_MODE_FULL, VALIDATION_MODE_LIGHT, VALIDATION_MODE_NONE
+from benchmark_runner.oadp.scenario import scenario_backup_namespaces
 
 
 class OadpPodValidationMixin:
@@ -325,11 +326,18 @@ class OadpPodValidationMixin:
                 return True
             else:
                 ds = scenario["dataset"]
-                ds["namespace"] = scenario["args"]["namespaces_to_backup"]
-                validation_status = self.validate_dataset(scenario, ds)
-                if not validation_status:
-                    self._OadpWorkloads__oadp_ds_failing_validation.append(ds)
-                return validation_status
+                namespaces = scenario_backup_namespaces(scenario)
+                if not namespaces:
+                    namespaces = [scenario["args"]["namespaces_to_backup"]]
+                all_ok = True
+                for ns in namespaces:
+                    ds_ns = dict(ds)
+                    ds_ns["namespace"] = ns
+                    validation_status = self.validate_dataset(scenario, ds_ns)
+                    if not validation_status:
+                        self._OadpWorkloads__oadp_ds_failing_validation.append(ds_ns)
+                        all_ok = False
+                return all_ok
         except Exception as err:
             self.fail_test_run(f" {err} occurred in " + self.get_current_function())
             raise err

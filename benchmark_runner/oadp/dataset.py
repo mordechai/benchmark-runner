@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 
 from benchmark_runner.common.logger.logger_time_stamp import logger, logger_time_stamp
+from benchmark_runner.oadp.constants import VM_DATASET_ROLE, VM_POPULATION_METHOD_SCRIPT
 
 
 class OadpDatasetMixin:
@@ -29,10 +30,12 @@ class OadpDatasetMixin:
                 obj_to_json=self.ds_get_total_datasets_for_namespace(namespace=ns),
             )
             for ds_count, ds in enumerate(self.ds_get_datasets_for_namespace(namespace=ns)):
+                asset_count = ds.get("pods_per_ns", ds.get("vms_per_namespace", 0))
+                asset_type = "VMs" if ds.get("role") == VM_DATASET_ROLE else "pods"
                 self.log_this(
                     level="INFO",
                     msg=f"Namespace: {ns} Dataset #{ds_count + 1} has total "
-                    f"{ds['pods_per_ns']} pods in ns {ns} detailed info: ",
+                    f"{asset_count} {asset_type} in ns {ns} detailed info: ",
                     obj_to_json=ds,
                 )
 
@@ -49,9 +52,11 @@ class OadpDatasetMixin:
             for ds in self.ds_get_datasets_for_namespace(namespace=ns):
                 logger.info(f"create_dataset will begin creating dataset for ns {ns} that has a total datasets of: {ds}")
                 self.create_source_dataset(scenario, ds)
+                created = ds.get("pods_per_ns", ds.get("vms_per_namespace", 0))
+                noun = "VMs" if ds.get("role") == VM_DATASET_ROLE else "pods"
                 logger.info(
-                    f"### INFO ### create_dataset completed adding pods of type {ds['role']} "
-                    f"that created {ds['pods_per_ns']} pods in ns {ns}"
+                    f"### INFO ### create_dataset completed adding {noun} of type {ds['role']} "
+                    f"that created {created} {noun} in ns {ns}"
                 )
 
     @logger_time_stamp
@@ -71,8 +76,13 @@ class OadpDatasetMixin:
             logger.info(f"### INFO ### create_source_dataset: ds is {ds}")
             if ds["role"] == "BusyBoxPodSingleNS.sh":
                 self.busybox_dataset_creation(scenario, ds)
-            if ds["role"] in ("generator", "dd_generator"):
+            elif ds["role"] in ("generator", "dd_generator"):
                 self.create_multi_pvutil_dataset(scenario, ds)
+            elif ds["role"] == VM_DATASET_ROLE:
+                if scenario["args"].get("vm_population_method") == VM_POPULATION_METHOD_SCRIPT:
+                    self.create_vm_dataset_via_script(scenario, ds)
+                else:
+                    self.create_vm_dataset(scenario, ds)
         except Exception as err:
             self.fail_test_run(f" {err} occurred in " + self.get_current_function())
             raise err

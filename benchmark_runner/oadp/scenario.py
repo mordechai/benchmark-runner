@@ -14,9 +14,71 @@ from benchmark_runner.common.logger.logger_time_stamp import logger, logger_time
 from benchmark_runner.oadp.constants import (
     ES_INDEX_PREFIX_DOWNSTREAM,
     ES_INDEX_PREFIX_UPSTREAM,
+    KNOWN_INCREMENT_LEVELS,
+    KNOWN_PLUGINS,
+    KNOWN_VM_POPULATION_METHODS,
+    MPQE_VM_SCRIPT_NS_SUFFIX,
+    PLUGIN_KUBEVIRT,
+    SHELL_METACHARACTERS,
     SOURCE_UPSTREAM,
+    VM_DATASET_ROLE,
+    VM_POPULATION_METHOD_NATIVE,
+    VM_POPULATION_METHOD_SCRIPT,
 )
 from benchmark_runner.oadp.oadp_exceptions import OadpError
+
+
+def scenario_includes_kubevirt_dataset(scenario: dict) -> bool:
+    """Return True if the scenario dataset (list or dict) includes role kubevirt."""
+    dataset_value = scenario.get("dataset")
+    if isinstance(dataset_value, list):
+        return any(d.get("role") == VM_DATASET_ROLE for d in dataset_value)
+    if isinstance(dataset_value, dict):
+        return dataset_value.get("role") == VM_DATASET_ROLE
+    return False
+
+
+def get_script_ns_count(scenario: dict) -> int:
+    """Return 'vm_population_script_args.ns' (ticket 029), default 1.
+
+    'ns' > 1 means VMsPopulation.sh populates 'ns' sibling namespaces with the
+    same VM/disk/CBT configuration instead of just one.
+    """
+    args = scenario.get("args", {})
+    if args.get("vm_population_method") != VM_POPULATION_METHOD_SCRIPT:
+        return 1
+    return int(args.get("vm_population_script_args", {}).get("ns", 1))
+
+
+def expand_multi_namespaces(namespace: str, ns_count: int) -> list:
+    """Expand a script-populated namespace ending in '-ns1' into the full sibling
+    namespace list VMsPopulation.sh creates for 'ns' > 1 (ticket 029).
+
+    A single ``VMsPopulation.sh -ns N -namespace <base>`` invocation creates N
+    sibling namespaces named ``<base>-ns1`` through ``<base>-nsN``. The
+    scenario's ``namespaces_to_backup``/dataset namespace conventionally
+    already carries the ``-ns1`` suffix (ticket 019); this reconstructs
+    ``<base>`` and returns all N sibling names in order. ``ns_count <= 1``
+    returns ``[namespace]`` unchanged, preserving today's single-namespace
+    behavior exactly.
+    """
+    if ns_count <= 1:
+        return [namespace]
+    base = namespace[: -len(MPQE_VM_SCRIPT_NS_SUFFIX)] if namespace.endswith(MPQE_VM_SCRIPT_NS_SUFFIX) else namespace
+    return [f"{base}-ns{i}" for i in range(1, ns_count + 1)]
+
+
+def scenario_backup_namespaces(scenario: dict) -> list:
+    """Return every namespace a scenario backs up/restores (ticket 029).
+
+    Expands ``args.namespaces_to_backup`` via ``vm_population_script_args.ns``
+    so callers that only have the scenario dict (cleanup, log collection,
+    reporting) cover sibling namespaces without needing ``scenario_datasets``.
+    """
+    base = scenario.get("args", {}).get("namespaces_to_backup", "")
+    if not base:
+        return []
+    return expand_multi_namespaces(base, get_script_ns_count(scenario))
 
 
 class OadpScenarioMixin:
@@ -73,15 +135,25 @@ class OadpScenarioMixin:
             if isinstance(dataset, list):
                 check_keys = dataset_keys + ["namespace"]
                 for data in dataset:
-                    if not all(key in data for key in check_keys):
+                    effective_keys = self._effective_dataset_keys(data, check_keys)
+                    if not all(key in data for key in effective_keys):
                         logger.error("Error: Missing dataset key(s) in the scenario.")
+                        return False
+                    if not self._validate_no_shell_metacharacters(data, "dataset"):
+                        return False
+                    if not self._validate_dataset_entry(data):
                         return False
                 if "args" in scenario and isinstance(dataset, dict) and "namespace_to_backup" not in scenario["args"]:
                     logger.error("Error: 'args' key must contain 'namespace_to_backup' when dataset is a list.")
                     return False
             elif isinstance(dataset, dict):
-                if not all(key in dataset for key in dataset_keys):
+                effective_keys = self._effective_dataset_keys(dataset, dataset_keys)
+                if not all(key in dataset for key in effective_keys):
                     logger.error("Error: Missing dataset key(s) in the scenario.")
+                    return False
+                if not self._validate_no_shell_metacharacters(dataset, "dataset"):
+                    return False
+                if not self._validate_dataset_entry(dataset):
                     return False
             else:
                 logger.error("Error: 'dataset' must be either a list or a dictionary.")
@@ -93,6 +165,193 @@ class OadpScenarioMixin:
                 logger.error("Error: Missing 'args' key(s) in the scenario.")
                 return False
 
+            plugin = args.get("plugin", "")
+            if plugin and plugin not in KNOWN_PLUGINS:
+                logger.error(f"Error: Unknown plugin '{plugin}'. Allowed: {sorted(KNOWN_PLUGINS)}")
+                return False
+
+            if not self._validate_no_shell_metacharacters(args, "args"):
+                return False
+
+            if not self._validate_vm_population_args(args):
+                return False
+
+            if not self._validate_increment_level(args):
+                return False
+
+        if scenario_includes_kubevirt_dataset(scenario):
+            plugin = scenario.get("args", {}).get("plugin", "")
+            if plugin != PLUGIN_KUBEVIRT:
+                logger.error(
+                    f"Error: Scenario with dataset role 'kubevirt' requires 'plugin: kubevirt' in args, "
+                    f"got 'plugin: {plugin}'. The kubevirt Velero plugin is needed for VM backups."
+                )
+                return False
+
+            if scenario.get("args", {}).get("vm_population_method") == VM_POPULATION_METHOD_SCRIPT:
+                if not self._validate_script_population_namespace(scenario):
+                    return False
+
+        if not self._validate_no_shell_metacharacters(scenario, "scenario"):
+            return False
+
+        return True
+
+    @staticmethod
+    def _effective_dataset_keys(dataset: dict, base_keys: list[str]) -> list[str]:
+        """For VM datasets, accept ``vms_per_namespace`` as alternative to ``pods_per_ns``."""
+        if dataset.get("role") == VM_DATASET_ROLE:
+            return [k for k in base_keys if k != "pods_per_ns"]
+        return base_keys
+
+    @staticmethod
+    def _validate_dataset_entry(dataset: dict) -> bool:
+        """Validate VM-specific fields when role is 'kubevirt'."""
+        if dataset.get("role") == VM_DATASET_ROLE:
+            if "vm_profile" not in dataset:
+                logger.error("Error: VM dataset (role=kubevirt) requires 'vm_profile' field.")
+                return False
+            if "vms_per_namespace" not in dataset and "pods_per_ns" not in dataset:
+                logger.error("Error: VM dataset requires 'vms_per_namespace' or 'pods_per_ns'.")
+                return False
+
+            disk_overrides = dataset.get("disk_overrides", {})
+            if isinstance(disk_overrides, dict):
+                for disk_name, fields in disk_overrides.items():
+                    if not isinstance(fields, dict):
+                        continue
+                    all_values = {disk_name: disk_name}
+                    all_values.update({k: v for k, v in fields.items() if isinstance(v, str)})
+                    for key, value in all_values.items():
+                        if any(ch in value for ch in SHELL_METACHARACTERS) or "'" in value:
+                            logger.error(f"Error: disk_overrides field '{key}' contains forbidden characters: {value!r}")
+                            return False
+        return True
+
+    @staticmethod
+    def _validate_vm_population_args(args: dict) -> bool:
+        """Validate 'vm_population_method' / 'vm_population_script_args' (plan 1.2).
+
+        Defaults to the native Python pipeline when 'vm_population_method' is
+        absent. When set to 'script', requires 'vm_population_script_args'
+        with 'vms' (positive int) and 'data_disks' (non-negative int; 0 means
+        OS disk only), and validates the optional 'cbt' boolean flag and the
+        optional 'ns' positive-int flag (number of sibling namespaces to
+        populate, default 1 — ticket 029).
+        """
+        method = args.get("vm_population_method", VM_POPULATION_METHOD_NATIVE)
+        if method not in KNOWN_VM_POPULATION_METHODS:
+            logger.error(
+                f"Error: Unknown vm_population_method '{method}'. Allowed: {sorted(KNOWN_VM_POPULATION_METHODS)}"
+            )
+            return False
+
+        if method != VM_POPULATION_METHOD_SCRIPT:
+            return True
+
+        script_args = args.get("vm_population_script_args")
+        if not isinstance(script_args, dict):
+            logger.error(
+                "Error: vm_population_method 'script' requires a 'vm_population_script_args' "
+                "dict with 'vms' and 'data_disks'."
+            )
+            return False
+
+        if "vms" not in script_args or "data_disks" not in script_args:
+            logger.error("Error: vm_population_script_args requires both 'vms' and 'data_disks'.")
+            return False
+
+        vms = script_args.get("vms")
+        if not isinstance(vms, int) or isinstance(vms, bool) or vms < 1:
+            logger.error(f"Error: vm_population_script_args.vms must be a positive integer, got {vms!r}")
+            return False
+
+        data_disks = script_args.get("data_disks")
+        if not isinstance(data_disks, int) or isinstance(data_disks, bool) or data_disks < 0:
+            logger.error(
+                f"Error: vm_population_script_args.data_disks must be a non-negative integer, got {data_disks!r}"
+            )
+            return False
+
+        cbt = script_args.get("cbt", False)
+        if not isinstance(cbt, bool):
+            logger.error(f"Error: vm_population_script_args.cbt must be a boolean, got {cbt!r}")
+            return False
+
+        ns = script_args.get("ns", 1)
+        if not isinstance(ns, int) or isinstance(ns, bool) or ns < 1:
+            logger.error(f"Error: vm_population_script_args.ns must be a positive integer, got {ns!r}")
+            return False
+
+        for key, value in script_args.items():
+            if isinstance(value, str) and (any(ch in value for ch in SHELL_METACHARACTERS) or "'" in value):
+                logger.error(
+                    f"Error: vm_population_script_args field '{key}' contains forbidden shell metacharacters: {value!r}"
+                )
+                return False
+
+        return True
+
+    @staticmethod
+    def _validate_increment_level(args: dict) -> bool:
+        """Validate the optional 'increment_level' arg (plan: incremental backup scenarios).
+
+        Only meaningful for script-populated VMs — VMsAddDataVerify.sh's
+        increment folders (inc1/inc2/inc3) assume the disk layout
+        VMsPopulation.sh creates.
+        """
+        increment_level = args.get("increment_level")
+        if increment_level is None:
+            return True
+
+        if increment_level not in KNOWN_INCREMENT_LEVELS:
+            logger.error(
+                f"Error: Unknown increment_level '{increment_level}'. Allowed: {sorted(KNOWN_INCREMENT_LEVELS)}"
+            )
+            return False
+
+        if args.get("vm_population_method") != VM_POPULATION_METHOD_SCRIPT:
+            logger.error(
+                "Error: 'increment_level' requires vm_population_method 'script' "
+                "(VMsAddDataVerify.sh's incremental data model only applies to script-populated VMs)."
+            )
+            return False
+
+        return True
+
+    @staticmethod
+    def _validate_script_population_namespace(scenario: dict) -> bool:
+        """Script-based population always creates '<base>-ns1' (VMsPopulation.sh's
+        multi-NS loop always appends '-ns<i>', even at -ns 1). The scenario's
+        effective namespace must already carry that suffix so vm_operations can
+        strip it and reconstruct the exact base name the script expects.
+
+        When 'vm_population_script_args.ns' > 1 (ticket 029), the scenario
+        still only names the first sibling namespace ('<base>-ns1') here —
+        ``expand_multi_namespaces()`` reconstructs the rest.
+        """
+        dataset_value = scenario.get("dataset")
+        namespace = ""
+        if isinstance(dataset_value, dict):
+            namespace = dataset_value.get("namespace", scenario.get("args", {}).get("namespaces_to_backup", ""))
+        elif isinstance(dataset_value, list):
+            namespace = scenario.get("args", {}).get("namespaces_to_backup", "")
+
+        if not namespace.endswith(MPQE_VM_SCRIPT_NS_SUFFIX):
+            logger.error(
+                f"Error: vm_population_method 'script' requires the dataset namespace to end with "
+                f"'{MPQE_VM_SCRIPT_NS_SUFFIX}' (VMsPopulation.sh always appends this suffix), got '{namespace}'."
+            )
+            return False
+        return True
+
+    @staticmethod
+    def _validate_no_shell_metacharacters(mapping: dict, context: str) -> bool:
+        """Reject string values containing shell metacharacters or single quotes (SEC-002)."""
+        for key, value in mapping.items():
+            if isinstance(value, str) and (any(ch in value for ch in SHELL_METACHARACTERS) or "'" in value):
+                logger.error(f"Error: {context} field '{key}' contains forbidden shell metacharacters: {value!r}")
+                return False
         return True
 
     @logger_time_stamp
@@ -128,7 +387,9 @@ class OadpScenarioMixin:
                     if existing_namespace_index is not None:
                         existing_entry = all_datasets[existing_namespace_index]
                         existing_entry["total_datasets_for_this_namespace"] += 1
-                        existing_entry["total_pods_per_all_datasets_with_same_namespace"] += dataset["pods_per_ns"]
+                        existing_entry["total_pods_per_all_datasets_with_same_namespace"] += dataset.get(
+                            "pods_per_ns", dataset.get("vms_per_namespace", 0)
+                        )
                         existing_entry["list_of_datasets_which_belong_to_this_namespace"].append(
                             self._process_dataset(dataset, namespace)
                         )
@@ -136,7 +397,9 @@ class OadpScenarioMixin:
                         summary = {
                             "namespace": namespace,
                             "total_datasets_for_this_namespace": 1,
-                            "total_pods_per_all_datasets_with_same_namespace": dataset["pods_per_ns"],
+                            "total_pods_per_all_datasets_with_same_namespace": dataset.get(
+                                "pods_per_ns", dataset.get("vms_per_namespace", 0)
+                            ),
                             "list_of_datasets_which_belong_to_this_namespace": [self._process_dataset(dataset, namespace)],
                             "all_ds_exists": False,
                             "all_ds_validated": False,
@@ -145,18 +408,28 @@ class OadpScenarioMixin:
                 self._OadpWorkloads__scenario_datasets = all_datasets
                 self.print_all_ds(scenario)
             elif isinstance(scenario["dataset"], dict):
-                namespace = scenario["args"].get("namespaces_to_backup", "")
-                summary = {
-                    "namespace": namespace,
-                    "total_datasets_for_this_namespace": 1,
-                    "total_pods_per_all_datasets_with_same_namespace": scenario["dataset"]["pods_per_ns"],
-                    "list_of_datasets_which_belong_to_this_namespace": [
-                        self._process_dataset(dataset=scenario["dataset"], namespace=namespace)
-                    ],
-                    "all_ds_exists": False,
-                    "all_ds_validated": False,
-                }
-                all_datasets.append(summary)
+                base_namespace = scenario["args"].get("namespaces_to_backup", "")
+                ds_dict = scenario["dataset"]
+                ns_count = get_script_ns_count(scenario)
+                # ticket 029: 'ns' > 1 populates several sibling namespaces
+                # ('<base>-ns1'..'<base>-nsN') with identical dataset config.
+                # Each gets its own summary entry so ds_get_all_namespaces()
+                # (and everything built on it: backup --include-namespaces,
+                # VM validation, incremental data) naturally covers all of them.
+                for namespace in expand_multi_namespaces(base_namespace, ns_count):
+                    summary = {
+                        "namespace": namespace,
+                        "total_datasets_for_this_namespace": 1,
+                        "total_pods_per_all_datasets_with_same_namespace": ds_dict.get(
+                            "pods_per_ns", ds_dict.get("vms_per_namespace", 0)
+                        ),
+                        "list_of_datasets_which_belong_to_this_namespace": [
+                            self._process_dataset(dataset=ds_dict, namespace=namespace)
+                        ],
+                        "all_ds_exists": False,
+                        "all_ds_validated": False,
+                    }
+                    all_datasets.append(summary)
                 self._OadpWorkloads__scenario_datasets = all_datasets
                 self.print_all_ds(scenario)
         except Exception as err:
@@ -265,12 +538,20 @@ class OadpScenarioMixin:
 
     @logger_time_stamp
     def calc_total_pods_per_namespace_in_datasets(self, scenario: dict, namespace: str) -> int:
-        """Sum pods_per_ns for entries matching namespace in list or dict dataset form."""
+        """Sum pods/VMs count for entries matching namespace in list or dict dataset form."""
         dataset_value = scenario.get("dataset")
         if isinstance(dataset_value, list):
-            total_pods = sum(entry.get("pods_per_ns", 0) for entry in dataset_value if entry.get("namespace") == namespace)
+            total_pods = sum(
+                entry.get("pods_per_ns", entry.get("vms_per_namespace", 0))
+                for entry in dataset_value
+                if entry.get("namespace") == namespace
+            )
         elif isinstance(dataset_value, dict):
-            total_pods = dataset_value.get("pods_per_ns", 0) if dataset_value.get("namespace") == namespace else 0
+            total_pods = (
+                dataset_value.get("pods_per_ns", dataset_value.get("vms_per_namespace", 0))
+                if dataset_value.get("namespace") == namespace
+                else 0
+            )
         else:
             total_pods = 0
         logger.info(f"### INFO ### calc_total_pods_per_namespace shows {namespace} has {total_pods}")
@@ -286,10 +567,10 @@ class OadpScenarioMixin:
             for item in test_scenario["dataset"]:
                 namespace = item["namespace"]
                 expected_capacity = item.get("expected_capacity", "0K")
-                pods_per_ns = item["pods_per_ns"]
+                asset_count = item.get("pods_per_ns", item.get("vms_per_namespace", 0))
                 value, unit = self._parse_capacity(expected_capacity)
                 value = self._convert_to_mb(value, unit)
-                ns_capacities[namespace] = ns_capacities.get(namespace, 0) + (value * pods_per_ns)
+                ns_capacities[namespace] = ns_capacities.get(namespace, 0) + (value * asset_count)
 
             total_data = sum(ns_capacities.values())
             ns_capacities["total_data_in_mb"] = total_data
@@ -299,12 +580,16 @@ class OadpScenarioMixin:
             return ns_capacities
 
         elif isinstance(dataset_value, dict):
-            namespace = test_scenario["args"]["namespaces_to_backup"]
-            expected_capacity = test_scenario["dataset"]["expected_capacity"]
-            pods_per_ns = test_scenario["dataset"]["pods_per_ns"]
+            ds_dict = test_scenario["dataset"]
+            expected_capacity = ds_dict.get("expected_capacity", "0K")
+            asset_count = ds_dict.get("pods_per_ns", ds_dict.get("vms_per_namespace", 0))
             value, unit = self._parse_capacity(expected_capacity)
             value = self._convert_to_mb(value, unit)
-            ns_capacities[namespace] = value * pods_per_ns
+            # ticket 029: cover every sibling namespace ('ns' > 1), not just
+            # the single 'namespaces_to_backup' value — each sibling holds an
+            # identical copy of the dataset.
+            for namespace in self.ds_get_all_namespaces():
+                ns_capacities[namespace] = value * asset_count
 
             total_data = sum(ns_capacities.values())
             ns_capacities["total_data_in_mb"] = total_data

@@ -2,17 +2,23 @@
 Mixin for DPA configuration, volume snapshot, and storage class setup.
 """
 
+import json
 import time
 
 from benchmark_runner.common.logger.logger_time_stamp import logger, logger_time_stamp
 from benchmark_runner.oadp.constants import (
     DEFAULT_DPA_NAME,
+    KUBEVIRT_VOLUME_POLICY_CONFIGMAP_NAME,
     PLUGIN_CSI,
+    PLUGIN_KUBEVIRT,
+    PLUGIN_KUBEVIRT_DATAMOVER,
     PLUGIN_RESTIC,
     PLUGIN_VBD,
     SC_CEPH_RBD,
+    SC_CEPH_RBD_VIRTUALIZATION,
     SC_CEPHFS,
     SC_CEPHFS_SHALLOW,
+    VM_DATASET_ROLE,
 )
 
 
@@ -53,6 +59,20 @@ class OadpConfigurationMixin:
                 )
                 return True
 
+            if self._scenario_needs_kubevirt_plugin(scenario):
+                default_plugins = result.get("velero", {}).get("defaultPlugins", [])
+                if PLUGIN_KUBEVIRT not in default_plugins:
+                    logger.warning(
+                        "## WARNING ### is_dpa_change_needed: 'kubevirt' not in defaultPlugins but scenario uses VM datasets."
+                    )
+                    return True
+
+            # 'kubevirt-datamover' (Flow2, CBT scenarios) is deliberately NOT checked here:
+            # it's not managed by modify-dpa.yaml (the ansible playbook this function gates),
+            # so reporting a change here would trigger a no-op ansible run. It's verified and
+            # patched directly by ensure_kubevirt_datamover_plugin(), called unconditionally
+            # from oadp_workloads.py right after this DPA block.
+
             uploader_type = PLUGIN_RESTIC if scenario["args"]["plugin"] == PLUGIN_RESTIC else "kopia"
 
             logger.info(
@@ -86,6 +106,10 @@ class OadpConfigurationMixin:
     @logger_time_stamp
     def config_dpa_for_plugin(self, scenario, oadp_namespace):
         try:
+            if not self.validate_dpa_structure(oadp_namespace):
+                logger.error("DPA pre-validation failed; aborting DPA patch")
+                self.fail_test_run("DPA pre-validation failed before patching")
+
             ssh = self._OadpWorkloads__ssh
             base_dir = self._OadpWorkloads__oadp_base_dir
             dpa_data = self.get_oc_resource_to_json(
@@ -110,13 +134,17 @@ class OadpConfigurationMixin:
             bucket_name = dpa_data["spec"]["backupLocations"][0]["velero"]["objectStorage"]["bucket"]
             config_profile = dpa_data["spec"]["backupLocations"][0]["velero"]["config"]["profile"]
             cred_name = dpa_data["spec"]["backupLocations"][0]["velero"]["credential"]["name"]
-            if scenario["args"]["plugin"] in (PLUGIN_CSI, PLUGIN_VBD):
+            if scenario["args"]["plugin"] in (PLUGIN_CSI, PLUGIN_VBD, PLUGIN_KUBEVIRT):
                 uploader_type = "kopia"
             else:
                 uploader_type = scenario["args"]["plugin"]
+            kubevirt_flag = (
+                "kubevirt_plugin=true" if self._scenario_needs_kubevirt_plugin(scenario) else "kubevirt_plugin=false"
+            )
             ansible_args = (
                 f"dpa_name={dpa_name} bucket_name={bucket_name} plugin_type={uploader_type} "
-                f"profile={config_profile} cred_name={cred_name} oadp_ns={oadp_namespace}"
+                f"profile={config_profile} cred_name={cred_name} oadp_ns={oadp_namespace} "
+                f"{kubevirt_flag}"
             )
             logger.info(
                 f'### INFO ### Updating DPA via ansible: ansible-playbook {base_dir}/modify-dpa.yaml -e "{ansible_args}" -vvv'
@@ -137,7 +165,7 @@ class OadpConfigurationMixin:
         try:
             base_dir = self._OadpWorkloads__oadp_base_dir
             cmd_set_volume_snapshot_class = ""
-            if sc == SC_CEPH_RBD:
+            if sc in (SC_CEPH_RBD, SC_CEPH_RBD_VIRTUALIZATION):
                 cmd_set_volume_snapshot_class = self._OadpWorkloads__ssh.run(cmd=f"oc apply -f {base_dir}/vsc-cephRBD.yaml")
             if sc in (SC_CEPHFS, SC_CEPHFS_SHALLOW):
                 cmd_set_volume_snapshot_class = self._OadpWorkloads__ssh.run(cmd=f"oc apply -f {base_dir}/vsc-cephFS.yaml")
@@ -204,9 +232,7 @@ class OadpConfigurationMixin:
                 namespace=test_env["velero_ns"],
             )
             if not velero_deployment or "spec" not in velero_deployment:
-                logger.warning(
-                    f":: WARN :: set_velero_log_level: velero deployment not found in {test_env['velero_ns']}"
-                )
+                logger.warning(f":: WARN :: set_velero_log_level: velero deployment not found in {test_env['velero_ns']}")
                 return
             velero_current_args = velero_deployment["spec"]["template"]["spec"]["containers"][0]["args"]
             if "--log-level=debug" not in velero_current_args:
@@ -240,6 +266,123 @@ class OadpConfigurationMixin:
             logger.error(f":: ERROR :: Issue in waiting for DPA changes to process in your oadp namespace {err}")
             self.fail_test_run(f" {err} occurred in " + self.get_current_function())
             raise err
+
+    # ------------------------------------------------------------------
+    # Flow2 setup: CBT-enabled kubevirt backups (ticket 028)
+    # ------------------------------------------------------------------
+
+    @logger_time_stamp
+    def ensure_kubevirt_datamover_plugin(self, scenario: dict, oadp_namespace: str) -> bool:
+        """Ensure 'kubevirt-datamover' is present in the DPA's defaultPlugins (Flow2).
+
+        No-op unless the scenario is CBT-enabled kubevirt (see
+        ``_scenario_needs_kubevirt_datamover_plugin``). Patches the DPA
+        directly via ``oc patch`` rather than routing through
+        ``modify-dpa.yaml`` (the ansible playbook only knows about the plain
+        'kubevirt' flag) — mirrors the JSON-patch approach already used by
+        ``set_velero_log_level()``.
+
+        Returns True if a patch was applied (caller should then re-run
+        ``wait_for_dpa_changes``/``verify_bsl_status``), False if already
+        present or not needed.
+        """
+        if not self._scenario_needs_kubevirt_datamover_plugin(scenario):
+            return False
+
+        dpa_data = self.get_oc_resource_to_json(
+            resource_type="dpa",
+            resource_name=self._OadpWorkloads__oadp_dpa,
+            namespace=oadp_namespace,
+        )
+        if not dpa_data:
+            logger.error(
+                ":: ERROR :: ensure_kubevirt_datamover_plugin: DPA not found; "
+                "cannot verify/add 'kubevirt-datamover' plugin"
+            )
+            self.fail_test_run("DPA not present while ensuring 'kubevirt-datamover' plugin")
+            return False
+
+        default_plugins = dpa_data.get("spec", {}).get("configuration", {}).get("velero", {}).get("defaultPlugins", [])
+        if PLUGIN_KUBEVIRT_DATAMOVER in default_plugins:
+            logger.info(
+                "### INFO ### ensure_kubevirt_datamover_plugin: 'kubevirt-datamover' already present in defaultPlugins"
+            )
+            return False
+
+        updated_plugins = [*default_plugins, PLUGIN_KUBEVIRT_DATAMOVER]
+        json_query = (
+            '[{"op": "replace", "path": "/spec/configuration/velero/defaultPlugins", "value": '
+            + json.dumps(updated_plugins)
+            + "}]"
+        )
+        self.patch_oc_resource(
+            resource_type="dpa",
+            resource_name=self._OadpWorkloads__oadp_dpa,
+            namespace=oadp_namespace,
+            patch_type="json",
+            patch_json=json_query,
+        )
+        logger.info(
+            f"### INFO ### ensure_kubevirt_datamover_plugin: added 'kubevirt-datamover' to defaultPlugins: "
+            f"{updated_plugins}"
+        )
+        return True
+
+    @logger_time_stamp
+    def ensure_kubevirt_volume_policy_configmap(self, scenario: dict, oadp_namespace: str) -> None:
+        """Ensure the 'kubevirt-volume-policy' resource-policy ConfigMap exists (Flow2).
+
+        No-op unless the scenario is CBT-enabled kubevirt (see
+        ``_scenario_needs_kubevirt_datamover_plugin``). Referenced by
+        ``exec_backup()`` via ``--resource-policies-configmap`` on CBT-enabled
+        kubevirt backups so Velero routes matching volumes through the
+        kubevirt datamover (``action.type: custom``, ``datamover: kubevirt``)
+        instead of its own CSI-snapshot handling.
+
+        If the ConfigMap is already present, it is left untouched — do not
+        overwrite a cluster-managed or previously applied policy.
+        """
+        if not self._scenario_needs_kubevirt_datamover_plugin(scenario):
+            return
+
+        existing = self.get_oc_resource_to_json(
+            resource_type="configmap",
+            resource_name=KUBEVIRT_VOLUME_POLICY_CONFIGMAP_NAME,
+            namespace=oadp_namespace,
+        )
+        if existing:
+            logger.info(
+                f"### INFO ### ensure_kubevirt_volume_policy_configmap: "
+                f"'{KUBEVIRT_VOLUME_POLICY_CONFIGMAP_NAME}' already present in "
+                f"{oadp_namespace}; leaving it unchanged"
+            )
+            return
+
+        manifest = (
+            "apiVersion: v1\n"
+            "kind: ConfigMap\n"
+            "metadata:\n"
+            f"  name: {KUBEVIRT_VOLUME_POLICY_CONFIGMAP_NAME}\n"
+            f"  namespace: {oadp_namespace}\n"
+            "data:\n"
+            "  policy.yaml: |\n"
+            "    version: v1\n"
+            "    volumePolicies:\n"
+            "      - conditions: {}\n"
+            "        action:\n"
+            "          type: custom\n"
+            "          parameters:\n"
+            "            datamover: kubevirt\n"
+        )
+        result = self._OadpWorkloads__ssh.run(cmd=f"cat <<'EOF' | oc create -f -\n{manifest}EOF")
+        if "created" not in result:
+            logger.error(
+                f":: ERROR :: ensure_kubevirt_volume_policy_configmap: create failed for "
+                f"'{KUBEVIRT_VOLUME_POLICY_CONFIGMAP_NAME}' in {oadp_namespace}: {result}"
+            )
+            self.fail_test_run(f"Unable to create {KUBEVIRT_VOLUME_POLICY_CONFIGMAP_NAME} ConfigMap")
+        else:
+            logger.info(f":: INFO :: ensure_kubevirt_volume_policy_configmap: {result}")
 
     @logger_time_stamp
     def verify_bsl_status(self):
@@ -276,6 +419,65 @@ class OadpConfigurationMixin:
         except Exception as err:
             self.fail_test_run(f" {err} occurred in " + self.get_current_function())
             raise err
+
+    @staticmethod
+    def _scenario_needs_kubevirt_plugin(scenario: dict) -> bool:
+        """Return True when the scenario uses the kubevirt Velero plugin."""
+        return scenario.get("args", {}).get("plugin") == PLUGIN_KUBEVIRT
+
+    @staticmethod
+    def _scenario_needs_kubevirt_datamover_plugin(scenario: dict) -> bool:
+        """Return True for CBT-enabled kubevirt VM scenarios (Flow2, ticket 028).
+
+        Two flows exist for ``plugin: kubevirt`` VM backups:
+
+        - Flow1 (no CBT / ``cbt: false``, e.g. TC 10.4): plain 'kubevirt' plugin
+          in the DPA's defaultPlugins is sufficient; ``exec_backup()`` already
+          runs a normal kubevirt-datamover backup (``--data-mover velero
+          --snapshot-move-data=true``).
+        - Flow2 (``cbt: true``, e.g. TC 10.5): the DPA additionally needs the
+          'kubevirt-datamover' plugin registered, plus a resource-policy
+          ConfigMap ('kubevirt-volume-policy') referenced on the backup CR —
+          otherwise the CSI snapshot policy conflicts with the datamover's own
+          snapshot handling of CBT-labeled volumes. This was observed live
+          during the TC 10.5 test as backup warnings: "PVC ... has snapshot
+          policy which conflicts with kubevirt datamover" (backup still
+          completed, but the warnings indicate the setup was incomplete).
+        """
+        if not OadpConfigurationMixin._scenario_needs_kubevirt_plugin(scenario):
+            return False
+        script_args = scenario.get("args", {}).get("vm_population_script_args", {})
+        return bool(script_args.get("cbt", False))
+
+    @logger_time_stamp
+    def validate_dpa_structure(self, oadp_namespace: str) -> bool:
+        """Pre-validate DPA JSON before patching (SEC-004).
+
+        Checks that the DPA has the expected top-level structure so
+        that a bad patch cannot silently corrupt the resource.
+        """
+        dpa_data = self.get_oc_resource_to_json(
+            resource_type="dpa",
+            resource_name=self._OadpWorkloads__oadp_dpa,
+            namespace=oadp_namespace,
+        )
+        if not dpa_data:
+            logger.error("DPA pre-validation: resource not found")
+            return False
+
+        required_paths = [
+            ("spec", "configuration", "velero", "defaultPlugins"),
+            ("spec", "backupLocations"),
+        ]
+        for path_parts in required_paths:
+            node = dpa_data
+            for part in path_parts:
+                if not isinstance(node, dict) or part not in node:
+                    logger.error(f"DPA pre-validation: missing path {'.'.join(path_parts)} at '{part}'")
+                    return False
+                node = node[part]
+        logger.info("DPA pre-validation: structure OK")
+        return True
 
     @logger_time_stamp
     def setup_ocs_cephfs_shallow(self):

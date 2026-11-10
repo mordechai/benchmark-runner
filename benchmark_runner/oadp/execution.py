@@ -13,7 +13,9 @@ from benchmark_runner.oadp.constants import (
     CR_TERMINAL_STATES,
     DEFAULT_TESTCASE_TIMEOUT,
     FILE_LEVEL_PLUGINS,
+    KUBEVIRT_VOLUME_POLICY_CONFIGMAP_NAME,
     PLUGIN_CSI,
+    PLUGIN_KUBEVIRT,
     PLUGIN_VBD,
     SOURCE_UPSTREAM,
 )
@@ -23,16 +25,32 @@ class OadpExecutionMixin:
     """Backup/restore execution, CR wait, ansible play validation, PV util checks."""
 
     @logger_time_stamp
-    def exec_restore(self, plugin: str, restore_name: str, backup_name: str) -> None:
-        """Create a Velero restore CR via oc exec or upstream velero CLI."""
+    def exec_restore(
+        self,
+        plugin: str,
+        restore_name: str,
+        backup_name: str,
+        resource_policy_configmap: str | None = None,
+    ) -> None:
+        """Create a Velero restore CR via oc exec or upstream velero CLI.
+
+        ``resource_policy_configmap``: Flow2 (ticket 028 follow-up) — for
+        CBT-enabled kubevirt scenarios, ``oadp_execute_scenario()`` passes
+        ``KUBEVIRT_VOLUME_POLICY_CONFIGMAP_NAME`` so the restore CR references
+        the same resource-policy ConfigMap as the backup via
+        ``--resource-policies-configmap``. Downstream-only (upstream Velero
+        1.12 predates the flag). ``None``/falsy for Flow1 and non-kubevirt.
+        """
         try:
             test_env = self._OadpWorkloads__test_env
             ssh = self._OadpWorkloads__ssh
             if test_env["source"] != SOURCE_UPSTREAM:
+                restore_flags = f"./velero restore create {restore_name} --from-backup {backup_name}"
+                if resource_policy_configmap:
+                    restore_flags += f" --resource-policies-configmap {resource_policy_configmap}"
                 restore_cmd = ssh.run(
                     cmd=f"oc -n {test_env['velero_ns']} exec deployment/velero -c velero -it -- "
-                    f"./velero restore create {restore_name} --from-backup {backup_name} "
-                    f"-n {test_env['velero_ns']}"
+                    f"{restore_flags} -n {test_env['velero_ns']}"
                 )
                 logger.info(f"### INFO ### Executing OADP restore with velero CLI in {test_env['velero_ns']}")
             if test_env["source"] == SOURCE_UPSTREAM:
@@ -49,8 +67,22 @@ class OadpExecutionMixin:
             raise err
 
     @logger_time_stamp
-    def exec_backup(self, plugin: str, backup_name: str, namespaces_to_backup: str) -> None:
-        """Create a Velero backup with plugin-appropriate flags for downstream or upstream."""
+    def exec_backup(
+        self,
+        plugin: str,
+        backup_name: str,
+        namespaces_to_backup: str,
+        resource_policy_configmap: str | None = None,
+    ) -> None:
+        """Create a Velero backup with plugin-appropriate flags for downstream or upstream.
+
+        ``resource_policy_configmap``: Flow2 (ticket 028) — for CBT-enabled
+        kubevirt scenarios, ``oadp_execute_scenario()`` passes
+        ``KUBEVIRT_VOLUME_POLICY_CONFIGMAP_NAME`` here so the backup CR
+        references the 'kubevirt-volume-policy' resource-policy ConfigMap via
+        ``--resource-policies-configmap``. ``None``/falsy for all other
+        scenarios (Flow1 and non-kubevirt plugins).
+        """
         test_env = self._OadpWorkloads__test_env
         ssh = self._OadpWorkloads__ssh
 
@@ -63,6 +95,20 @@ class OadpExecutionMixin:
                 backup_cmd = ssh.run(cmd=f"{base_cmd} --default-volumes-to-fs-backup=true --snapshot-volumes=false")
             elif plugin == PLUGIN_VBD:
                 backup_cmd = ssh.run(cmd=f"{base_cmd} --snapshot-move-data=true")
+            elif plugin == PLUGIN_KUBEVIRT:
+                # VM disks need the kubevirt-datamover plugin to actually copy data into the
+                # BSL — a bare CSI snapshot (the "else" default below) is not portable/durable
+                # on its own. See ticket 006: a live test caught this defaulting silently to a
+                # snapshot-only backup (snapshotMoveData: false, no DataUpload CRs created).
+                kubevirt_cmd = f"{base_cmd} --data-mover 'velero' --snapshot-move-data=true"
+                if resource_policy_configmap:
+                    # Flow2 (ticket 028): CBT-enabled kubevirt backups. Without this,
+                    # Velero's own CSI-snapshot volume handling conflicts with the
+                    # kubevirt-datamover plugin's handling of CBT-labeled volumes —
+                    # observed live as "PVC ... has snapshot policy which conflicts
+                    # with kubevirt datamover" backup warnings during the TC 10.5 test.
+                    kubevirt_cmd += f" --resource-policies-configmap {resource_policy_configmap}"
+                backup_cmd = ssh.run(cmd=kubevirt_cmd)
             elif plugin == PLUGIN_CSI:
                 backup_cmd = ssh.run(cmd=base_cmd)
             else:
@@ -80,7 +126,7 @@ class OadpExecutionMixin:
                 backup_cmd = ssh.run(cmd=f"{base_cmd} --default-volumes-to-fs-backup=true --snapshot-volumes=false{ns_flag}")
             elif plugin == PLUGIN_CSI:
                 backup_cmd = ssh.run(cmd=f"{base_cmd}{ns_flag}")
-            elif plugin == PLUGIN_VBD:
+            elif plugin in (PLUGIN_VBD, PLUGIN_KUBEVIRT):
                 backup_cmd = ssh.run(cmd=f"{base_cmd} --data-mover 'velero' --snapshot-move-data=true{ns_flag}")
             else:
                 backup_cmd = ssh.run(cmd=f"{base_cmd}{ns_flag}")
@@ -164,10 +210,16 @@ class OadpExecutionMixin:
                 cr_name = test_scenario["args"]["OADP_CR_NAME"]
                 if cr_type == "backup":
                     self.oadp_timer(action="start", transaction_name=cr_name)
+                    resource_policy_configmap = (
+                        KUBEVIRT_VOLUME_POLICY_CONFIGMAP_NAME
+                        if self._scenario_needs_kubevirt_datamover_plugin(test_scenario)
+                        else None
+                    )
                     self.exec_backup(
                         plugin=test_scenario["args"]["plugin"],
                         backup_name=test_scenario["args"]["backup_name"],
                         namespaces_to_backup=namespaces_to_backup,
+                        resource_policy_configmap=resource_policy_configmap,
                     )
                     self.wait_for_condition_of_cr(
                         cr_type=cr_type,
@@ -177,10 +229,16 @@ class OadpExecutionMixin:
                     self.oadp_timer(action="stop", transaction_name=cr_name)
                 if cr_type == "restore":
                     self.oadp_timer(action="start", transaction_name=cr_name)
+                    resource_policy_configmap = (
+                        KUBEVIRT_VOLUME_POLICY_CONFIGMAP_NAME
+                        if self._scenario_needs_kubevirt_datamover_plugin(test_scenario)
+                        else None
+                    )
                     self.exec_restore(
                         plugin=test_scenario["args"]["plugin"],
                         restore_name=cr_name,
                         backup_name=test_scenario["args"]["backup_name"],
+                        resource_policy_configmap=resource_policy_configmap,
                     )
                     self.wait_for_condition_of_cr(
                         cr_type=cr_type,

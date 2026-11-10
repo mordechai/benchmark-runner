@@ -1,0 +1,35 @@
+name: rhel9-hammerdb-postgres
+os:
+  type: linux
+  distribution: rhel9
+  image_source: registry.redhat.io/rhel9/rhel-guest-image:latest
+  pull_method: node
+resources:
+  cpu_cores: 4
+  memory: 8Gi
+disks:
+  - name: rootdisk
+    size: 30Gi
+    boot_order: 1
+  - name: datadisk
+    size: 60Gi
+    filesystem: xfs
+    mount_point: /var/lib/pgsql
+    source: blank
+    expected_capacity: "45G"
+    validation_path: /var/lib/pgsql
+network:
+  interfaces:
+    - name: default
+      model: virtio
+      type: masquerade
+cloud_init:
+  users:
+    - name: cloud-user
+      ssh_authorized_keys: []
+data_generation:
+  method: hammerdb
+  config:
+    database: postgres
+    tpcc_warehouses: 10
+    tpcc_virtual_users: 4

@@ -30,6 +30,7 @@ from benchmark_runner.oadp.constants import (
     SOURCE_UPSTREAM,
     VALIDATION_MODE_LIGHT,
     VELERO_CLI_PATH,
+    VM_DATASET_ROLE,
 )
 from benchmark_runner.oadp.datamover import OadpDatamoverMixin
 from benchmark_runner.oadp.dataset import OadpDatasetMixin
@@ -40,8 +41,10 @@ from benchmark_runner.oadp.oadp_exceptions import MissingResultReport
 from benchmark_runner.oadp.pod_validation import OadpPodValidationMixin
 from benchmark_runner.oadp.reporting import OadpReportingMixin
 from benchmark_runner.oadp.resources import OadpResourcesMixin
-from benchmark_runner.oadp.scenario import OadpScenarioMixin
+from benchmark_runner.oadp.scenario import OadpScenarioMixin, scenario_includes_kubevirt_dataset
 from benchmark_runner.oadp.validation import OadpValidationMixin
+from benchmark_runner.oadp.vm_operations import OadpVmOperationsMixin
+from benchmark_runner.oadp.vm_validation import OadpVmValidationMixin
 from benchmark_runner.workloads.workloads_operations import WorkloadsOperations
 
 
@@ -49,6 +52,8 @@ class OadpWorkloads(
     OadpConfigurationMixin,
     OadpDatamoverMixin,
     OadpDatasetMixin,
+    OadpVmOperationsMixin,
+    OadpVmValidationMixin,
     OadpExecutionMixin,
     OadpPodValidationMixin,
     OadpValidationMixin,
@@ -93,6 +98,7 @@ class OadpWorkloads(
             "validation_mode",
             VALIDATION_MODE_LIGHT,
         )
+        self.__oadp_enable_kubevirt = self._environment_variables_dict.get("oadp_enable_kubevirt", False)
         self.__oadp_resource_collection = False
         self.__oadp_ds_failing_validation = []
         self.__retry_logic = {
@@ -149,6 +155,55 @@ class OadpWorkloads(
         }
 
     # ------------------------------------------------------------------
+    # Dataset type detection and gating
+    # ------------------------------------------------------------------
+
+    def _reject_kubevirt_if_disabled(self, scenario: dict) -> None:
+        """Fail fast when a kubevirt scenario is loaded but the feature flag is off."""
+        if self.__oadp_enable_kubevirt:
+            return
+        if scenario_includes_kubevirt_dataset(scenario):
+            msg = (
+                f"Scenario '{scenario.get('name', '')}' uses role '{VM_DATASET_ROLE}' "
+                f"but OADP_ENABLE_KUBEVIRT is False. Set OADP_ENABLE_KUBEVIRT=True to run VM scenarios."
+            )
+            logger.error(msg)
+            self.fail_test_run(msg)
+            raise RuntimeError(msg)
+
+    _CNV_OPERATIONAL_PHASES = frozenset({"Succeeded", "Replacing"})
+
+    def _check_cnv_prerequisite(self, scenario: dict) -> None:
+        """Verify CNV operator is installed when the scenario uses VM datasets.
+
+        Checks ALL CSVs in ``openshift-cnv`` and accepts any phase that
+        indicates the operator is functional: ``Succeeded`` (normal) or
+        ``Replacing`` (upgrade in progress — operator still operational).
+        """
+        if not self._scenario_has_vm_datasets(scenario):
+            return
+        result = self.__ssh.run(
+            cmd="oc get csv -n openshift-cnv -o jsonpath='{.items[*].status.phase}' 2>/dev/null"
+        )
+        phases = result.strip().strip("'").split()
+        if not any(p in self._CNV_OPERATIONAL_PHASES for p in phases):
+            msg = (
+                "OpenShift Virtualization (CNV) operator is not installed or not ready "
+                "in namespace 'openshift-cnv'. VM scenarios require CNV. "
+                f"CSV phases found: {phases!r} (need one of {sorted(self._CNV_OPERATIONAL_PHASES)})"
+            )
+            logger.error(msg)
+            self.fail_test_run(msg)
+            raise RuntimeError(msg)
+        logger.info(f"CNV operator pre-check passed: CSV phases {phases}")
+
+    def _scenario_has_vm_datasets(self, scenario: dict) -> bool:
+        """Return True when the feature flag is on and scenario contains VM datasets."""
+        if not self.__oadp_enable_kubevirt:
+            return False
+        return scenario_includes_kubevirt_dataset(scenario)
+
+    # ------------------------------------------------------------------
     # Lifecycle hooks
     # ------------------------------------------------------------------
 
@@ -182,6 +237,9 @@ class OadpWorkloads(
         test_scenario = self.load_test_scenario()
         self.get_dataset_details(scenario=test_scenario)
 
+        self._reject_kubevirt_if_disabled(test_scenario)
+        self._check_cnv_prerequisite(test_scenario)
+
         self.remove_previous_run_report()
         self.set_velero_stream_source()
 
@@ -205,11 +263,29 @@ class OadpWorkloads(
                 self.config_dpa_for_plugin(scenario=test_scenario, oadp_namespace=self.__test_env["velero_ns"])
                 self.wait_for_dpa_changes(oadp_namespace=self.__test_env["velero_ns"])
                 self.verify_bsl_status()
+            # Flow2 (ticket 028): CBT-enabled kubevirt scenarios additionally need the
+            # 'kubevirt-datamover' plugin registered and a resource-policy ConfigMap in
+            # place. Both are no-ops for non-CBT scenarios.
+            datamover_plugin_added = self.ensure_kubevirt_datamover_plugin(
+                scenario=test_scenario, oadp_namespace=self.__test_env["velero_ns"]
+            )
+            if datamover_plugin_added:
+                self.wait_for_dpa_changes(oadp_namespace=self.__test_env["velero_ns"])
+                self.verify_bsl_status()
+            self.ensure_kubevirt_volume_policy_configmap(
+                scenario=test_scenario, oadp_namespace=self.__test_env["velero_ns"]
+            )
 
         self.get_bucket_details("velero")
 
+        has_vm_datasets = self._scenario_has_vm_datasets(test_scenario)
+
         if test_scenario["args"]["OADP_CR_TYPE"] == "backup":
-            self.verify_datsets_before_backups(test_scenario)
+            if has_vm_datasets:
+                self.verify_vm_datasets_before_backups(test_scenario)
+                self.apply_incremental_data_if_requested(test_scenario)
+            else:
+                self.verify_datsets_before_backups(test_scenario)
 
         if test_scenario["args"]["OADP_CR_TYPE"] == "restore":
             remove_source_dataset = test_scenario["args"].get("existingResourcePolicy", False)
@@ -240,16 +316,21 @@ class OadpWorkloads(
         self.oadp_execute_scenario(test_scenario, run_method="python")
 
         if test_scenario["args"]["OADP_CR_TYPE"] == "restore":
-            self.set_validation_retry_logic(interval_between_checks=15, max_attempts=28)
-            dataset_restored = self.validate_expected_datasets(test_scenario)
-            self.__run_metadata["summary"]["validations"]["dataset_restored_as_expected"] = (
-                "PASS" if dataset_restored else "FAIL"
-            )
-            self.__run_metadata["summary"]["results"]["dataset_post_run_validation"] = dataset_restored
-            if not dataset_restored:
-                logger.error(f"Restored Dataset for {test_scenario['args']['OADP_CR_NAME']} did not pass post run validations")
+            if has_vm_datasets:
+                self.validate_restored_vm_datasets(test_scenario)
             else:
-                logger.info("Restore passed post run validations")
+                self.set_validation_retry_logic(interval_between_checks=15, max_attempts=28)
+                dataset_restored = self.validate_expected_datasets(test_scenario)
+                self.__run_metadata["summary"]["validations"]["dataset_restored_as_expected"] = (
+                    "PASS" if dataset_restored else "FAIL"
+                )
+                self.__run_metadata["summary"]["results"]["dataset_post_run_validation"] = dataset_restored
+                if not dataset_restored:
+                    logger.error(
+                        f"Restored Dataset for {test_scenario['args']['OADP_CR_NAME']} did not pass post run validations"
+                    )
+                else:
+                    logger.info("Restore passed post run validations")
 
         self.validate_cr(
             ns=self.__test_env["velero_ns"],
@@ -285,6 +366,7 @@ class OadpWorkloads(
         self.verify_pod_restarts(self.__test_env["velero_ns"])
         self.verify_cluster_operators_status()
 
+        self.enrich_summary_with_vm_metadata(test_scenario)
         self.set_run_status()
         self.create_json_summary()
 

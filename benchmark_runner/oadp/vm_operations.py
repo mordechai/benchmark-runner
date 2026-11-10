@@ -1,0 +1,685 @@
+"""
+Mixin for KubeVirt VM dataset creation, data population, and lifecycle management.
+
+Uses the existing ``Virtctl`` / ``OC`` helpers from ``benchmark_runner.common``
+for structured VM lifecycle operations (DV status, VM existence, VM deletion,
+start/stop).  Guest-level operations (``virtctl ssh``) still use raw SSH since
+no ``OC``/``Virtctl`` wrapper exists for arbitrary in-guest commands.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import time
+from pathlib import Path
+
+from jinja2 import Environment, FileSystemLoader
+
+from benchmark_runner.common.logger.logger_time_stamp import logger, logger_time_stamp
+from benchmark_runner.common.oc.oc import OC
+from benchmark_runner.common.virtctl.virtctl import Virtctl
+from benchmark_runner.oadp.constants import (
+    MPQE_VM_SCRIPT_NS_SUFFIX,
+    MPQE_VM_SCRIPTS_PATH,
+    SHELL_METACHARACTERS,
+    VM_DEFAULT_BATCH_SIZE,
+    VM_DEFAULT_POPULATION_CONCURRENCY,
+    VM_DEFAULT_SSH_USER,
+    VM_DEFAULT_THROTTLE_BATCHES,
+)
+from benchmark_runner.oadp.vm_profiles import load_vm_profile, merge_disk_overrides
+
+_TEMPLATES_DIR = Path(__file__).resolve().parent / "vm_templates"
+
+
+class OadpVmOperationsMixin:
+    """KubeVirt VM dataset creation and data population."""
+
+    _virtctl_instance: Virtctl | None = None
+
+    def _get_virtctl(self) -> Virtctl:
+        """Lazily instantiate a Virtctl helper (extends OC, shares SSH run)."""
+        if self._virtctl_instance is None:
+            self._virtctl_instance = Virtctl()
+        return self._virtctl_instance
+
+    def _get_jinja_env(self) -> Environment:
+        return Environment(
+            loader=FileSystemLoader(str(_TEMPLATES_DIR)),
+            trim_blocks=True,
+            lstrip_blocks=True,
+        )
+
+    @staticmethod
+    def _ssh_user_from_profile(profile: dict) -> str:
+        cloud_init_cfg = profile.get("cloud_init", {})
+        users = cloud_init_cfg.get("users", [{}])
+        if users:
+            return users[0].get("name", VM_DEFAULT_SSH_USER)
+        return VM_DEFAULT_SSH_USER
+
+    @staticmethod
+    def _ssh_authorized_keys_from_profile(profile: dict) -> list:
+        cloud_init_cfg = profile.get("cloud_init", {})
+        users = cloud_init_cfg.get("users", [{}])
+        if users:
+            return users[0].get("ssh_authorized_keys", [])
+        return []
+
+    _SAFE_PROFILE_FIELD_RE = re.compile(r"^[a-zA-Z0-9_./ -]+$")
+
+    @classmethod
+    def _validate_profile_shell_fields(cls, profile: dict) -> None:
+        """Reject profile fields containing shell metacharacters before template rendering (SEC-002 defense-in-depth)."""
+        for disk in profile.get("disks", []):
+            for field in ("name", "filesystem", "mount_point"):
+                value = disk.get(field)
+                if value is None:
+                    continue
+                if not isinstance(value, str) or not cls._SAFE_PROFILE_FIELD_RE.match(value):
+                    raise ValueError(f"Profile disk field '{field}' contains unsafe characters: {value!r}")
+                if any(ch in value for ch in SHELL_METACHARACTERS) or "'" in value:
+                    raise ValueError(f"Profile disk field '{field}' contains shell metacharacters: {value!r}")
+        data_gen = profile.get("data_generation", {})
+        config = data_gen.get("config", {})
+        for field in ("database", "bs"):
+            value = config.get(field)
+            if value is not None and isinstance(value, str):
+                if not cls._SAFE_PROFILE_FIELD_RE.match(value):
+                    raise ValueError(f"Profile data_generation.config.{field} contains unsafe characters: {value!r}")
+        ssh_user = cls._ssh_user_from_profile(profile)
+        if not cls._SAFE_PROFILE_FIELD_RE.match(ssh_user):
+            raise ValueError(f"Profile cloud_init user contains unsafe characters: {ssh_user!r}")
+
+    # ------------------------------------------------------------------
+    # VM dataset creation entry point
+    # ------------------------------------------------------------------
+
+    @logger_time_stamp
+    def create_vm_dataset(self, scenario: dict, ds: dict) -> None:
+        """Create a KubeVirt VM dataset: OS DV, VMs, wait, populate data."""
+        profile_name = ds.get("vm_profile", "")
+        profile = load_vm_profile(profile_name)
+        disk_overrides = ds.get("disk_overrides")
+        profile = merge_disk_overrides(profile, disk_overrides)
+        self._validate_profile_shell_fields(profile)
+
+        namespace = ds["namespace"]
+        vms_per_ns = ds.get("vms_per_namespace", ds.get("pods_per_ns", 1))
+        sc = ds["sc"]
+        batch_size = int(scenario["args"].get("vm_creation_batch_size", VM_DEFAULT_BATCH_SIZE))
+        throttle_batches = int(scenario["args"].get("vm_creation_throttle_batches", VM_DEFAULT_THROTTLE_BATCHES))
+
+        self._ensure_namespace(namespace)
+        os_dv_name = self._create_os_datavolume(profile, namespace, sc)
+        self._batch_create_vms(
+            profile,
+            namespace,
+            sc,
+            os_dv_name,
+            vms_per_ns,
+            batch_size,
+            throttle_batches,
+            scenario,
+        )
+        all_running = self._wait_for_all_vms_running(namespace, vms_per_ns, scenario)
+        if not all_running:
+            self.fail_test_run(f"Not all VMIs running in {namespace} after timeout")
+        self._wait_for_guest_agents(namespace, vms_per_ns)
+
+        if profile.get("data_generation", {}).get("method"):
+            self._populate_vms_with_data(
+                profile,
+                namespace,
+                vms_per_ns,
+                scenario,
+            )
+
+    # ------------------------------------------------------------------
+    # Script-based VM population (Phase 1 script integration — plan 1.3/1.4)
+    # ------------------------------------------------------------------
+
+    _SCRIPT_EXIT_CODE_MARKER = "MPQE_SCRIPT_EXIT_CODE"
+
+    def _run_vm_script(self, cmd: str, log_label: str) -> str:
+        """Run an external mpqe-scale-scripts VM lifecycle script synchronously.
+
+        Uses the raw shell client (``self.__ssh``, accessed via its mangled
+        name since this mixin isn't ``OadpWorkloads`` itself) rather than
+        ``self._oc``, matching how the rest of the OADP module invokes
+        standalone external scripts. ``SSH.run()``'s default path returns
+        merged stdout/stderr with no return code, and its ``is_check=True``
+        path imposes a short subprocess timeout unsuitable for these
+        long-running scripts — so the exit code is captured by appending an
+        ``echo`` marker to the command instead.
+
+        Calls ``self.fail_test_run()`` on non-zero exit.
+        """
+        ssh = self._OadpWorkloads__ssh
+        full_cmd = f"{cmd}; echo {self._SCRIPT_EXIT_CODE_MARKER}:$?"
+        logger.info(f"Running {log_label}: {cmd}")
+        output = ssh.run(cmd=full_cmd)
+        match = re.search(rf"{self._SCRIPT_EXIT_CODE_MARKER}:(\d+)", output or "")
+        exit_code = int(match.group(1)) if match else 1
+        if exit_code != 0:
+            logger.error(f"{log_label} failed (exit {exit_code}):\n{output}")
+            self.fail_test_run(f"{log_label} failed with exit code {exit_code}")
+        else:
+            logger.info(f"{log_label} completed successfully")
+        return output or ""
+
+    @staticmethod
+    def _mpqe_namespace_base(namespace: str) -> str:
+        """Strip the '-ns1' suffix VMsPopulation.sh always appends, since callers
+        pass the desired final namespace but the script re-adds that suffix itself.
+        """
+        if namespace.endswith(MPQE_VM_SCRIPT_NS_SUFFIX):
+            return namespace[: -len(MPQE_VM_SCRIPT_NS_SUFFIX)]
+        return namespace
+
+    @logger_time_stamp
+    def create_vm_dataset_via_script(self, scenario: dict, ds: dict) -> None:
+        """Create a KubeVirt VM dataset via VMsPopulation.sh (Phase 1 script-integration path).
+
+        Alternative to ``create_vm_dataset()`` for scenarios with
+        ``vm_population_method: script``. Blocks until the script completes —
+        it internally waits for VMs to boot, populates baseline data, and
+        (optionally) enables CBT before returning.
+
+        Multi-namespace groups (``vm_population_script_args.ns`` > 1, ticket
+        029): a single ``VMsPopulation.sh -ns N`` invocation creates every
+        sibling namespace ('<base>-ns1'..'<base>-nsN') at once — there is no
+        way to ask the script to create just one sibling on its own. So this
+        method only actually runs the script when ``ds`` is the group's
+        '-ns1' member (the "leader"); it's called once per sibling namespace
+        by ``verify_vm_datasets_before_backups()``, and the non-leader calls
+        are no-ops beyond recording their own CBT state.
+        """
+        namespace = ds["namespace"]
+        script_args = scenario["args"].get("vm_population_script_args", {})
+        vms = int(script_args.get("vms", 1))
+        data_disks = int(script_args.get("data_disks", 1))
+        cbt = bool(script_args.get("cbt", False))
+        ns_count = int(script_args.get("ns", 1))
+        namespace_base = self._mpqe_namespace_base(namespace)
+        is_group_leader = namespace.endswith(MPQE_VM_SCRIPT_NS_SUFFIX)
+
+        if is_group_leader:
+            cmd = (
+                f"{MPQE_VM_SCRIPTS_PATH}/VMsPopulation.sh "
+                f"-vms {vms} -disks {data_disks} -ns {ns_count} -namespace {namespace_base}"
+            )
+            if cbt:
+                cmd += " -cbt"
+
+            self.oadp_timer(action="start", transaction_name="vm_dataset_creation_script")
+            self._run_vm_script(
+                cmd,
+                f"VMsPopulation.sh (namespace={namespace_base}, vms={vms}, data_disks={data_disks}, "
+                f"cbt={cbt}, ns_count={ns_count})",
+            )
+            self.oadp_timer(action="stop", transaction_name="vm_dataset_creation_script")
+        else:
+            logger.info(
+                f"create_vm_dataset_via_script: {namespace} is a sibling in a {ns_count}-namespace "
+                f"group already created by the '-ns1' member's single VMsPopulation.sh invocation "
+                f"— skipping a redundant script call."
+            )
+
+        if cbt:
+            cbt_state = self.check_cbt_state(namespace)
+            self._record_cbt_state(namespace, cbt_state)
+
+    # ------------------------------------------------------------------
+    # CBT (Changed Block Tracking) script integration
+    # ------------------------------------------------------------------
+
+    @logger_time_stamp
+    def enable_cbt_on_vms(self, namespace: str) -> None:
+        """Enable CBT on all VMs in a namespace via ``VMsEnableCBT.sh``.
+
+        The script runs the full lifecycle: power off, add the
+        ``changedBlockTracking=true`` label, power on, expand
+        ``persistent-state`` PVCs to 500Mi, restart. Prefer passing ``-cbt``
+        directly to ``VMsPopulation.sh`` at creation time
+        (``create_vm_dataset_via_script``) — this method exists for enabling
+        CBT on already-populated VMs.
+        """
+        cmd = f"{MPQE_VM_SCRIPTS_PATH}/VMsEnableCBT.sh -ns {namespace}"
+        self._run_vm_script(cmd, f"VMsEnableCBT.sh (namespace={namespace})")
+
+    _CBT_VM_LINE_RE = re.compile(r"^Verify CBT state and label for VM:\s*(\S+)\s*,")
+    _CBT_STATE_LINE_RE = re.compile(r"^CBT State:\s*(.*)$")
+    _CBT_LABEL_LINE_RE = re.compile(r"^CBT label:\s*(.*)$")
+
+    @logger_time_stamp
+    def check_cbt_state(self, namespace: str) -> dict:
+        """Check per-VM CBT state and label via ``VMsCBTstate.sh``.
+
+        Returns ``{vm_name: {"state": <changedBlockTracking.state>, "label": <label value>}}``.
+        """
+        cmd = f"{MPQE_VM_SCRIPTS_PATH}/VMsCBTstate.sh -ns {namespace}"
+        output = self._OadpWorkloads__ssh.run(cmd=cmd) or ""
+        result: dict = {}
+        current_vm = None
+        for line in output.splitlines():
+            vm_match = self._CBT_VM_LINE_RE.match(line.strip())
+            if vm_match:
+                current_vm = vm_match.group(1)
+                result[current_vm] = {"state": "", "label": ""}
+                continue
+            if current_vm is None:
+                continue
+            state_match = self._CBT_STATE_LINE_RE.match(line.strip())
+            if state_match:
+                result[current_vm]["state"] = state_match.group(1).strip()
+                continue
+            label_match = self._CBT_LABEL_LINE_RE.match(line.strip())
+            if label_match:
+                result[current_vm]["label"] = label_match.group(1).strip()
+        logger.info(f"CBT state for namespace {namespace}: {result}")
+        return result
+
+    def _record_cbt_state(self, namespace: str, cbt_state: dict) -> None:
+        """Record CBT state in run_metadata for reporting."""
+        run_metadata = self._OadpWorkloads__run_metadata
+        run_metadata["summary"]["validations"].setdefault("cbt_state", {})
+        run_metadata["summary"]["validations"]["cbt_state"][namespace] = cbt_state
+
+    # ------------------------------------------------------------------
+    # Incremental data (Phase 1 script integration — VMsAddDataVerify.sh -inc)
+    # ------------------------------------------------------------------
+
+    @logger_time_stamp
+    def add_incremental_data(self, namespace: str, increment_level: str) -> None:
+        """Generate incremental data on a script-populated namespace via ``VMsAddDataVerify.sh -inc``.
+
+        The script generates data on ``/home/data`` and every discovered data
+        disk, then self-verifies in the same invocation (non-zero exit on
+        failure, checked here via ``_run_vm_script``). Callers wanting an
+        explicit boolean confirmation beyond the exit code should follow up
+        with ``verify_vm_data_via_script()`` (see ``apply_incremental_data_if_requested``).
+        """
+        cmd = f"{MPQE_VM_SCRIPTS_PATH}/VMsAddDataVerify.sh -ns {namespace} -inc {increment_level}"
+        self._run_vm_script(cmd, f"VMsAddDataVerify.sh -inc {increment_level} (namespace={namespace})")
+
+    @logger_time_stamp
+    def apply_incremental_data_if_requested(self, scenario: dict) -> None:
+        """If 'increment_level' is set, add incremental data to every VM namespace
+        in the scenario before backup execution, then explicitly re-confirm via
+        ``verify_vm_data_via_script()`` (post-increment verification, plan item 4).
+
+        No-op when 'increment_level' is absent — the normal (non-incremental)
+        backup scenario path.
+        """
+        increment_level = scenario["args"].get("increment_level")
+        if not increment_level:
+            return
+
+        for namespace in self.ds_get_all_namespaces():
+            self.add_incremental_data(namespace, increment_level)
+            if not self.verify_vm_data_via_script(namespace):
+                self.fail_test_run(
+                    f"Post-increment verification failed for namespace {namespace} "
+                    f"after adding {increment_level}"
+                )
+
+    # ------------------------------------------------------------------
+    # Namespace
+    # ------------------------------------------------------------------
+
+    def _ensure_namespace(self, namespace: str) -> None:
+        oc = self._oc
+        existing = oc.run(cmd=f"oc get ns {namespace} --no-headers 2>/dev/null")
+        if namespace not in existing:
+            result = oc.run(cmd=f"oc create ns {namespace}")
+            logger.info(f"oc create ns result: {result}")
+            logger.info(f"Created namespace {namespace}")
+
+    # ------------------------------------------------------------------
+    # OS DataVolume
+    # ------------------------------------------------------------------
+
+    @logger_time_stamp
+    def _create_os_datavolume(
+        self,
+        profile: dict,
+        namespace: str,
+        sc: str,
+    ) -> str:
+        """Create the golden OS DataVolume that VMs clone from."""
+        oc = self._oc
+        os_config = profile.get("os", {})
+        root_disk = next(
+            (d for d in profile.get("disks", []) if d.get("boot_order") == 1),
+            {},
+        )
+        dv_name = f"{profile['name']}-os-dv"
+
+        existing = oc.run(cmd=f"oc get dv {dv_name} -n {namespace} --no-headers 2>/dev/null")
+        if dv_name in existing:
+            logger.info(f"OS DataVolume {dv_name} already exists, skipping creation")
+            self._wait_for_dv_ready(dv_name, namespace)
+            return dv_name
+
+        env = self._get_jinja_env()
+        template = env.get_template("dv_template.yaml")
+        rendered = template.render(
+            dv_name=dv_name,
+            namespace=namespace,
+            image_source=os_config.get("image_source", ""),
+            pull_method=os_config.get("pull_method", "node"),
+            root_disk_size=root_disk.get("size", "30Gi"),
+            storage_class=sc,
+        )
+
+        dv_file = f"/tmp/oadp-os-dv-{namespace}.yaml"
+        with open(dv_file, "w") as f:
+            f.write(rendered)
+        logger.info(f"Wrote DV manifest to {dv_file}")
+        apply_result = oc.run(cmd=f"oc apply -f {dv_file}")
+        logger.info(f"oc apply result for DV {dv_name}: {apply_result}")
+        if "error" in str(apply_result).lower() or "invalid" in str(apply_result).lower():
+            self.fail_test_run(f"Failed to create DataVolume {dv_name}: {apply_result}")
+        logger.info(f"Created OS DataVolume {dv_name} in {namespace}")
+
+        self._wait_for_dv_ready(dv_name, namespace)
+        return dv_name
+
+    def _wait_for_dv_ready(self, dv_name: str, namespace: str) -> None:
+        """Poll DV phase using OC.check_dv_status pattern with namespace support."""
+        timeout = 1800
+        elapsed = 0
+        while elapsed < timeout:
+            if self._oc.check_dv_status(status="Succeeded", namespace=namespace):
+                logger.info(f"DataVolume {dv_name} is ready")
+                return
+            time.sleep(OC.SLEEP_TIME * 5)
+            elapsed += OC.SLEEP_TIME * 5
+            if elapsed % 60 == 0:
+                logger.info(f"Waiting for DV {dv_name}: elapsed={elapsed}s/{timeout}s")
+        msg = f"DataVolume {dv_name} did not reach Succeeded within {timeout}s"
+        logger.error(msg)
+        self.fail_test_run(msg)
+
+    # ------------------------------------------------------------------
+    # Batched VM creation
+    # ------------------------------------------------------------------
+
+    @logger_time_stamp
+    def _batch_create_vms(
+        self,
+        profile: dict,
+        namespace: str,
+        sc: str,
+        os_dv_name: str,
+        total_vms: int,
+        batch_size: int,
+        throttle_batches: int,
+        scenario: dict,
+    ) -> None:
+        """Apply VM manifests in batches with throttle gates.
+
+        Uses ``oc apply`` via ``self._oc.run(background=True)`` for async batch
+        creation.  Direct ``OC.create_vm_sync`` is not used here because it
+        waits synchronously per VM — incompatible with batch concurrency.
+        """
+        oc = self._oc
+        env = self._get_jinja_env()
+        template = env.get_template("vm_template.yaml")
+
+        root_disk = next(
+            (d for d in profile.get("disks", []) if d.get("boot_order") == 1),
+            {},
+        )
+        data_disks = [d for d in profile.get("disks", []) if d.get("boot_order") != 1]
+
+        ssh_user = self._ssh_user_from_profile(profile)
+        ssh_authorized_keys = self._ssh_authorized_keys_from_profile(profile)
+        ssh_password = profile.get("cloud_init", {}).get("password", "")
+        if not ssh_password and not ssh_authorized_keys:
+            logger.warning(
+                "No SSH keys or explicit password in profile — defaulting to password 'redhat'. "
+                "This is acceptable for benchmark clusters only."
+            )
+
+        self.oadp_timer(action="start", transaction_name="vm_dataset_creation")
+        batch_count = 0
+
+        for i in range(total_vms):
+            vm_name = f"oadp-vm-{profile['name']}-{i}"
+            rendered = template.render(
+                vm_name=vm_name,
+                namespace=namespace,
+                cpu_cores=profile.get("resources", {}).get("cpu_cores", 2),
+                memory=profile.get("resources", {}).get("memory", "4Gi"),
+                data_disks=data_disks,
+                os_dv_name=os_dv_name,
+                root_disk_size=root_disk.get("size", "30Gi"),
+                storage_class=sc,
+                ssh_user=ssh_user,
+                ssh_authorized_keys=ssh_authorized_keys,
+                ssh_password=ssh_password,
+            )
+
+            vm_file = f"/tmp/oadp-vm-{namespace}-{i}.yaml"
+            with open(vm_file, "w") as f:
+                f.write(rendered)
+            apply_result = oc.run(cmd=f"oc apply -f {vm_file}")
+            logger.info(f"oc apply result for VM {vm_name}: {apply_result}")
+
+            if (i + 1) % batch_size == 0:
+                batch_count += 1
+                logger.info(f"VM creation batch {batch_count}: applied VMs {i - batch_size + 2} to {i + 1}")
+
+                if batch_count % throttle_batches == 0:
+                    self._verify_vms_are_progressing(namespace, scenario)
+
+        self.oadp_timer(action="stop", transaction_name="vm_dataset_creation")
+        logger.info(f"All {total_vms} VM manifests applied in {namespace}")
+
+    # ------------------------------------------------------------------
+    # VM readiness
+    # ------------------------------------------------------------------
+
+    def _verify_vms_are_progressing(
+        self,
+        namespace: str,
+        scenario: dict,
+    ) -> bool:
+        """Check that the Running VMI count is increasing (throttle gate)."""
+        retry_logic = self._OadpWorkloads__retry_logic
+
+        previous_count = self._count_running_vmis(namespace)
+        for _attempt in range(retry_logic["max_attempts"]):
+            time.sleep(retry_logic["interval_between_checks"])
+            current_count = self._count_running_vmis(namespace)
+            if current_count > previous_count:
+                logger.info(f"VMIs progressing: {previous_count} -> {current_count}")
+                return True
+            previous_count = current_count
+        logger.warning(f"VMIs not progressing in {namespace}, count: {previous_count}")
+        return False
+
+    def _count_running_vmis(self, namespace: str) -> int:
+        result = self._oc.run(cmd=f"oc get vmi -n {namespace} --no-headers 2>/dev/null | grep -c Running")
+        try:
+            return int(result.strip())
+        except (ValueError, AttributeError):
+            return 0
+
+    @logger_time_stamp
+    def _wait_for_all_vms_running(
+        self,
+        namespace: str,
+        expected_count: int,
+        scenario: dict,
+    ) -> bool:
+        """Poll until all VMIs in namespace report Running."""
+        timeout = int(scenario["args"].get("testcase_timeout", 43200))
+        elapsed = 0
+        while elapsed < timeout:
+            count = self._count_running_vmis(namespace)
+            if count >= expected_count:
+                logger.info(f"All {expected_count} VMIs running in {namespace}")
+                return True
+            time.sleep(OC.SLEEP_TIME * 5)
+            elapsed += OC.SLEEP_TIME * 5
+            if elapsed % 60 == 0:
+                logger.info(f"Waiting for VMIs: {count}/{expected_count} running, elapsed={elapsed}s")
+        logger.error(f"Only {self._count_running_vmis(namespace)}/{expected_count} VMIs running after {timeout}s")
+        return False
+
+    def _wait_for_guest_agents(self, namespace: str, expected_count: int) -> None:
+        """Wait until qemu-guest-agent is connected on all VMIs."""
+        timeout = OC.SHORT_TIMEOUT
+        elapsed = 0
+        while elapsed < timeout:
+            result = self._oc.run(
+                cmd=f"oc get vmi -n {namespace} -o jsonpath="
+                f"'{{.items[*].status.conditions[?(@.type==\"AgentConnected\")].status}}'"
+            )
+            connected = result.strip().split()
+            true_count = sum(1 for s in connected if s == "True")
+            if true_count >= expected_count:
+                logger.info(f"Guest agents connected on all {expected_count} VMIs")
+                return
+            time.sleep(OC.SLEEP_TIME * 3)
+            elapsed += OC.SLEEP_TIME * 3
+        logger.warning(f"Guest agent timeout: only {true_count}/{expected_count} connected after {timeout}s")
+
+    # ------------------------------------------------------------------
+    # Data population
+    # ------------------------------------------------------------------
+
+    @logger_time_stamp
+    def _populate_vms_with_data(
+        self,
+        profile: dict,
+        namespace: str,
+        total_vms: int,
+        scenario: dict,
+    ) -> None:
+        """Run data generation commands concurrently on all VMs.
+
+        Uses ``virtctl ssh`` via ``self._oc.run()`` for in-guest command
+        execution.  No ``Virtctl``/``OC`` helper exists for arbitrary guest
+        commands, so raw command construction is required here.
+        """
+        oc = self._oc
+        concurrency = int(
+            scenario["args"].get(
+                "vm_population_concurrency",
+                VM_DEFAULT_POPULATION_CONCURRENCY,
+            )
+        )
+        method = profile.get("data_generation", {}).get("method", "")
+        config = profile.get("data_generation", {}).get("config", {})
+        ssh_user = self._ssh_user_from_profile(profile)
+
+        self.oadp_timer(action="start", transaction_name="vm_data_population")
+
+        pending_vms = []
+        for i in range(total_vms):
+            vm_name = f"oadp-vm-{profile['name']}-{i}"
+            cmd = self._build_data_gen_command(method, config, profile)
+            if not cmd:
+                continue
+
+            oc.run(
+                cmd=f"virtctl ssh {ssh_user}@{vm_name} -n {namespace} --command '{cmd}' &",
+                background=True,
+            )
+            pending_vms.append(vm_name)
+
+            if len(pending_vms) >= concurrency:
+                self._wait_for_data_gen_batch(
+                    oc,
+                    namespace,
+                    pending_vms,
+                    ssh_user,
+                    method,
+                    scenario,
+                )
+                pending_vms = []
+
+        if pending_vms:
+            self._wait_for_data_gen_batch(
+                oc,
+                namespace,
+                pending_vms,
+                ssh_user,
+                method,
+                scenario,
+            )
+
+        self.oadp_timer(action="stop", transaction_name="vm_data_population")
+        logger.info(f"Data population completed for {total_vms} VMs")
+
+    @staticmethod
+    def _build_data_gen_command(
+        method: str,
+        config: dict,
+        profile: dict,
+    ) -> str:
+        """Construct the in-guest data generation command string.
+
+        For HammerDB, passes database type, warehouse count, and virtual users
+        as positional arguments to the in-guest ``run_tpcc.sh`` script.
+        The script is expected at ``/opt/hammerdb/run_tpcc.sh`` in the VM image.
+        """
+        if method == "hammerdb":
+            database = config.get("database", "mariadb")
+            warehouses = config.get("tpcc_warehouses", 10)
+            vusers = config.get("tpcc_virtual_users", 4)
+            return f"/opt/hammerdb/run_tpcc.sh {database} {warehouses} {vusers}"
+        if method == "dd":
+            data_disks = [d for d in profile.get("disks", []) if d.get("mount_point")]
+            if not data_disks:
+                return ""
+            disk = data_disks[0]
+            mount_point = disk.get("mount_point", "/mnt/data")
+            bs = config.get("bs", "1M")
+            count = config.get("count", 1024)
+            return f"dd if=/dev/urandom of={mount_point}/fill.dat bs={bs} count={count} oflag=direct"
+        return ""
+
+    _DATA_GEN_PROCESS_PATTERNS = {
+        "hammerdb": "hammerdb|run_tpcc",
+        "dd": r"dd.*fill\.dat",
+    }
+
+    def _wait_for_data_gen_batch(
+        self,
+        oc: object,
+        namespace: str,
+        vm_names: list[str],
+        ssh_user: str,
+        method: str,
+        scenario: dict,
+    ) -> None:
+        """Poll VMs until data generation processes finish."""
+        timeout = int(scenario["args"].get("testcase_timeout", 43200))
+        process_pattern = self._DATA_GEN_PROCESS_PATTERNS.get(method, method)
+        remaining = list(vm_names)
+        elapsed = 0
+        while remaining and elapsed < timeout:
+            still_running = []
+            for vm_name in remaining:
+                result = oc.run(
+                    cmd=f"virtctl ssh {ssh_user}@{vm_name} -n {namespace} "
+                    f"--command 'pgrep -fc \"{process_pattern}\" || echo 0'"
+                )
+                try:
+                    count = int(result.strip().split()[-1])
+                except (ValueError, IndexError):
+                    count = 0
+                if count > 0:
+                    still_running.append(vm_name)
+            remaining = still_running
+            if remaining:
+                time.sleep(30)
+                elapsed += 30
+        if remaining:
+            logger.warning(f"Data generation did not complete on {len(remaining)} VMs after {elapsed}s: {remaining}")

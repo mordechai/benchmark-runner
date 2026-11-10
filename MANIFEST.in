@@ -38,6 +38,10 @@ include benchmark_runner/common/ocp_resources/custom/template/*.yaml
 # ocp assisted installer (jetlag)
 include benchmark_runner/common/assisted_installer/jetlag/run_jetlag.sh
 
+# OADP VM profiles and templates
+include benchmark_runner/oadp/vm_profiles/*.yaml
+include benchmark_runner/oadp/vm_templates/*.yaml
+
 # prometheus queries yaml
 include benchmark_runner/common/prometheus/metrics-default.yaml
 include benchmark_runner/common/prometheus/metrics-examples.yaml
