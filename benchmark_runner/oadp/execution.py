@@ -25,32 +25,20 @@ class OadpExecutionMixin:
     """Backup/restore execution, CR wait, ansible play validation, PV util checks."""
 
     @logger_time_stamp
-    def exec_restore(
-        self,
-        plugin: str,
-        restore_name: str,
-        backup_name: str,
-        resource_policy_configmap: str | None = None,
-    ) -> None:
+    def exec_restore(self, plugin: str, restore_name: str, backup_name: str) -> None:
         """Create a Velero restore CR via oc exec or upstream velero CLI.
 
-        ``resource_policy_configmap``: Flow2 (ticket 028 follow-up) — for
-        CBT-enabled kubevirt scenarios, ``oadp_execute_scenario()`` passes
-        ``KUBEVIRT_VOLUME_POLICY_CONFIGMAP_NAME`` so the restore CR references
-        the same resource-policy ConfigMap as the backup via
-        ``--resource-policies-configmap``. Downstream-only (upstream Velero
-        1.12 predates the flag). ``None``/falsy for Flow1 and non-kubevirt.
+        Flow2 ``kubevirt-volume-policy`` / ``--resource-policies-configmap`` is
+        backup-only (Velero rejects volumePolicies on restore).
         """
         try:
             test_env = self._OadpWorkloads__test_env
             ssh = self._OadpWorkloads__ssh
             if test_env["source"] != SOURCE_UPSTREAM:
-                restore_flags = f"./velero restore create {restore_name} --from-backup {backup_name}"
-                if resource_policy_configmap:
-                    restore_flags += f" --resource-policies-configmap {resource_policy_configmap}"
                 restore_cmd = ssh.run(
                     cmd=f"oc -n {test_env['velero_ns']} exec deployment/velero -c velero -it -- "
-                    f"{restore_flags} -n {test_env['velero_ns']}"
+                    f"./velero restore create {restore_name} --from-backup {backup_name} "
+                    f"-n {test_env['velero_ns']}"
                 )
                 logger.info(f"### INFO ### Executing OADP restore with velero CLI in {test_env['velero_ns']}")
             if test_env["source"] == SOURCE_UPSTREAM:
@@ -229,16 +217,10 @@ class OadpExecutionMixin:
                     self.oadp_timer(action="stop", transaction_name=cr_name)
                 if cr_type == "restore":
                     self.oadp_timer(action="start", transaction_name=cr_name)
-                    resource_policy_configmap = (
-                        KUBEVIRT_VOLUME_POLICY_CONFIGMAP_NAME
-                        if self._scenario_needs_kubevirt_datamover_plugin(test_scenario)
-                        else None
-                    )
                     self.exec_restore(
                         plugin=test_scenario["args"]["plugin"],
                         restore_name=cr_name,
                         backup_name=test_scenario["args"]["backup_name"],
-                        resource_policy_configmap=resource_policy_configmap,
                     )
                     self.wait_for_condition_of_cr(
                         cr_type=cr_type,
